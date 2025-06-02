@@ -1,0 +1,12 @@
+fastapi==0.111.0
+uvicorn==0.30.1
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+sqlalchemy==2.0.30
+asyncpg==0.29.0
+databases==0.8.0
+pandas==2.2.2
+numpy==1.26.4
+scikit-learn==1.5.0
+plotly==5.22.0
+python-multipart==0.0.9
