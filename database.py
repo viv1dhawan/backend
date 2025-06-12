@@ -6,8 +6,8 @@ from databases import Database
 import sqlalchemy
 
 # Configuration for your PostgreSQL database
-DATABASE_URL_ASYNC = "postgresql+asyncpg://postgres:Vivek12@localhost:5433/myapp_database"
-DATABASE_URL_SYNC = "postgresql://postgres:Vivek12@localhost:5433/myapp_database"
+DATABASE_URL_ASYNC = "postgresql+asyncpg://geoverse_user:UoeVIoXyhhWruxWADLyKZdcbhEbvD9n1@dpg-d159fj3e5dus739dr010-a.oregon-postgres.render.com/geoverse"
+DATABASE_URL_SYNC = "postgresql://geoverse_user:UoeVIoXyhhWruxWADLyKZdcbhEbvD9n1@dpg-d159fj3e5dus739dr010-a.oregon-postgres.render.com/geoverse"
 
 # Async engine for use with FastAPI and async operations
 # Change echo=True to echo=False to suppress SQLAlchemy engine logs
