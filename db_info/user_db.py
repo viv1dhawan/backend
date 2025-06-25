@@ -36,68 +36,75 @@ async def create_user(user_data: Dict[str, Any]) -> Dict[str, Any]:
         last_name=user_data["last_name"],
         email=user_data["email"],
         hashed_password=hashed_password,
-        is_verified=False,
+        is_verified=False, # New users are unverified by default
         created_at=datetime.utcnow(),
         updated_at=datetime.utcnow()
     )
-    user_id = await database.execute(query)
-    # Fetch the newly created user to return all its data, including auto-generated fields
-    return await get_user_by_id(user_id)
+    last_record_id = await database.execute(query)
+    # Fetch the newly created user to return it
+    return await get_user_by_id(last_record_id)
+
 
 async def get_user_by_email(email: str) -> Optional[Dict[str, Any]]:
     """
-    Retrieves a user from the database by their email address.
-    Args:
-        email (str): The email of the user to retrieve.
-    Returns:
-        Optional[dict]: The user's data as a dictionary, or None if not found.
+    Retrieves a user by their email address.
     """
     query = users.select().where(users.c.email == email)
-    return await database.fetch_one(query)
+    user_record = await database.fetch_one(query)
+    return dict(user_record) if user_record else None
 
 async def get_user_by_id(user_id: int) -> Optional[Dict[str, Any]]:
     """
-    Retrieves a user from the database by their ID.
-    Args:
-        user_id (int): The ID of the user to retrieve.
-    Returns:
-        Optional[dict]: The user's data as a dictionary, or None if not found.
+    Retrieves a user by their ID.
     """
     query = users.select().where(users.c.id == user_id)
-    return await database.fetch_one(query)
+    user_record = await database.fetch_one(query)
+    return dict(user_record) if user_record else None
+
+async def update_user_details(email: str, updated_fields: Dict[str, Any]) -> None:
+    """
+    Updates specified fields for a user based on their email.
+    Does not update password directly (use update_password for that).
+    """
+    # Ensure 'new_password' is not in updated_fields if it was passed
+    updated_fields.pop("new_password", None)
+
+    if not updated_fields: # If no fields to update after popping password
+        return
+
+    updated_fields["updated_at"] = datetime.utcnow() # Update timestamp
+
+    query = users.update().where(users.c.email == email).values(**updated_fields)
+    await database.execute(query)
+
+async def update_password(email: str, new_password: str) -> None:
+    """
+    Updates a user's password.
+    """
+    hashed_password = hash_password(new_password)
+    query = users.update().where(users.c.email == email).values(
+        hashed_password=hashed_password,
+        updated_at=datetime.utcnow()
+    )
+    await database.execute(query)
 
 async def get_all_users() -> List[Dict[str, Any]]:
     """
     Retrieves all users from the database.
-    Returns:
-        List[dict]: A list of all user data.
     """
     query = users.select()
-    return await database.fetch_all(query)
+    user_records = await database.fetch_all(query)
+    return [dict(record) for record in user_records]
 
-async def update_user_details(email: str, updated_fields: Dict[str, Any]) -> None:
-    """
-    Updates specific fields for a user.
-    Args:
-        email (str): The email of the user to update.
-        updated_fields (dict): A dictionary of fields to update (e.g., {"first_name": "NewName"}).
-    """
-    query = users.update().where(users.c.email == email).values(**updated_fields, updated_at=datetime.utcnow())
-    await database.execute(query)
-
-# --- Password Reset Token Management ---
+# --- Password Reset Token Operations ---
 async def create_password_reset_token(email: str) -> str:
     """
-    Generates and stores a password reset token for a given email.
-    Args:
-        email (str): The email for which to generate the token.
-    Returns:
-        str: The generated token.
+    Generates and stores a password reset token for the given email.
     """
     token = secrets.token_urlsafe(32)
     expires_at = datetime.utcnow() + timedelta(hours=1)  # Token valid for 1 hour
 
-    # Delete any existing tokens for this email to ensure only one active token
+    # Invalidate any existing tokens for this user
     delete_query = password_reset_tokens.delete().where(password_reset_tokens.c.email == email)
     await database.execute(delete_query)
 
@@ -113,42 +120,25 @@ async def create_password_reset_token(email: str) -> str:
 async def verify_password_reset_token(token: str) -> Optional[str]:
     """
     Verifies a password reset token and returns the associated email if valid.
-    Args:
-        token (str): The password reset token to verify.
-    Returns:
-        Optional[str]: The email associated with the token, or None if invalid/expired.
     """
     query = password_reset_tokens.select().where(
         password_reset_tokens.c.token == token,
         password_reset_tokens.c.expires_at > datetime.utcnow()
     )
     token_record = await database.fetch_one(query)
+
     if token_record:
-        # Invalidate the token after use
-        delete_query = password_reset_tokens.delete().where(password_reset_tokens.c.token == token)
+        email = token_record["email"]
+        # Invalidate the token after successful verification/use
+        delete_query = password_reset_tokens.delete().where(password_reset_tokens.c.id == token_record["id"])
         await database.execute(delete_query)
-        return token_record["email"]
+        return email
     return None
 
-async def update_password(email: str, new_password: str) -> None:
-    """
-    Updates a user's password after successful verification.
-    Args:
-        email (str): The email of the user whose password to update.
-        new_password (str): The new plain-text password.
-    """
-    hashed_password = hash_password(new_password)
-    query = users.update().where(users.c.email == email).values(hashed_password=hashed_password, updated_at=datetime.utcnow())
-    await database.execute(query)
-
-# --- Email Verification Token Management ---
+# --- Email Verification Operations ---
 async def generate_verification_token(email: str) -> str:
     """
-    Generates and stores an email verification token for a given email.
-    Args:
-        email (str): The email for which to generate the token.
-    Returns:
-        str: The generated token.
+    Generates and stores an email verification token.
     """
     token = secrets.token_urlsafe(32)
     expires_at = datetime.utcnow() + timedelta(hours=24)  # Token valid for 24 hours
@@ -186,8 +176,8 @@ async def verify_user_with_token(token: str) -> bool:
         update_query = users.update().where(users.c.email == email).values(is_verified=True, updated_at=datetime.utcnow())
         await database.execute(update_query)
 
-        # Invalidate the token after use
-        delete_query = email_verification_tokens.delete().where(email_verification_tokens.c.token == token)
+        # Invalidate the token
+        delete_query = email_verification_tokens.delete().where(email_verification_tokens.c.id == token_record["id"])
         await database.execute(delete_query)
         return True
     return False
