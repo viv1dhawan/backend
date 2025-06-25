@@ -1,8 +1,9 @@
+# app.py (Extended with Q&A Endpoints)
 from fastapi import APIRouter, HTTPException, Depends, Form, File, UploadFile, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from jose import JWTError, jwt
 from datetime import datetime, timedelta
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 import pandas as pd
 import numpy as np
 import plotly.express as px
@@ -15,17 +16,25 @@ from math import radians, cos, sin, asin, sqrt
 import json
 import os
 
-# Import database operations from direct sub-packages
+# Import database operations
 import db_info.user_db as user_db
 import db_info.application_db as application_db
 
-# Import Pydantic schemas from direct sub-packages
+# Import Pydantic schemas
 from Schema.user_schema import UserCreate, UserOut, PasswordReset, PasswordResetRequest, EmailVerificationRequest, EmailVerification, UserUpdate
-from Schema.gravity_schema import EarthquakeQuery, GravityDataPoint, ProcessedGravityData, UploadResponse, AnomalyDetectionResult, ClusteringResult, PlotlyGraph, ErrorResponse
+from Schema.application_schema import EarthquakeQuery, GravityDataPoint, ProcessedGravityData, UploadResponse, AnomalyDetectionResult, ClusteringResult, PlotlyGraph, ErrorResponse, Researcher
+# Import Q&A related schemas
+from Schema.application_schema import QuestionCreate, QuestionResponse, CommentCreate, CommentResponse, LikeDislikeType, QuestionInteractionResponse
+
+# Import database session factory (assuming it's defined in database.py)
+from database import database, get_db_session # Your async database connection setup
+from sqlalchemy.ext.asyncio import AsyncSession # Crucial for type hinting async sessions
 
 # Define API Routers
 users_router = APIRouter()
 app_router = APIRouter()
+qna_router = APIRouter() # New router for Q&A features
+researcher_router = APIRouter() # New router for Researcher features
 
 # --- Security Configuration ---
 SECRET_KEY = "IAMVIVEKDHAWAN_SUPER_SECRET_KEY"  # IMPORTANT: Use environment variables in production!
@@ -48,7 +57,7 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
 
-async def get_current_user(token: str = Depends(oauth2_scheme)):
+async def get_current_user(token: str = Depends(oauth2_scheme)) -> Dict[str, Any]:
     """
     Authenticates and retrieves the current user based on the provided JWT token.
     """
@@ -78,7 +87,7 @@ async def signup(user: UserCreate):
     existing_user = await user_db.get_user_by_email(user.email)
     if existing_user:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email already registered")
-    
+
     created_user_data = await user_db.create_user(user.model_dump())
     return UserOut(**created_user_data)
 
@@ -91,7 +100,7 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()):
     current_user = await user_db.get_user_by_email(form_data.username)
     if not current_user or not user_db.verify_password(form_data.password, current_user["hashed_password"]):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Incorrect username or password")
-    
+
     access_token = create_access_token(data={"sub": current_user["email"]})
     return {"access_token": access_token, "token_type": "bearer"}
 
@@ -168,7 +177,7 @@ async def update_user_details(
 
     if "new_password" in updated_fields and updated_fields["new_password"]:
         await user_db.update_password(user_email, updated_fields.pop("new_password"))
-    
+
     if updated_fields:  # Update other fields if any remain
         await user_db.update_user_details(user_email, updated_fields)
 
@@ -220,7 +229,7 @@ def haversine(lat1, lon1, lat2, lon2):
 async def upload_gravity_data(file: UploadFile = File(...)):
     """
     Uploads a CSV file containing gravity data.
-    The CSV must have 'latitude', 'longitude', 'elevation', and 'gravity' columns.
+    The CSV must have 'latitude', 'longitude', and 'gravity' columns.
     """
     if not file.filename.endswith(".csv"):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid file format. Please upload a CSV file.")
@@ -260,7 +269,7 @@ async def calculate_bouguer_anomaly(df: pd.DataFrame = Depends(get_dataframe_dep
 
     # Apply Bouguer correction
     df["bouguer"] = df["gravity"] - (0.3086 * df["elevation"]) + (0.0419 * (RHO / 1000) * df["elevation"])
-    await application_db.update_gravity_data(df[['id', 'bouguer']])  # Update only the bouguer column
+    await application_db.update_gravity_data(df[['id', 'bouguer']]) # Update only the bouguer column
     return df.to_dict(orient="records")
 
 @app_router.get("/kmeans-clusters/", response_model=List[ClusteringResult], summary="Perform K-Means Clustering")
@@ -279,7 +288,7 @@ async def perform_kmeans_clustering(
     try:
         kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
         df['cluster'] = kmeans.fit_predict(features)
-        await application_db.update_gravity_data(df[['id', 'cluster']])  # Update only the cluster column
+        await application_db.update_gravity_data(df[['id', 'cluster']]) # Update only the cluster column
         return df[['latitude', 'longitude', 'elevation', 'gravity', 'cluster']].to_dict(orient="records")
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"K-Means clustering failed: {e}")
@@ -290,169 +299,359 @@ async def perform_anomaly_detection(
     df: pd.DataFrame = Depends(get_dataframe_dependency)
 ):
     """
-    Performs Isolation Forest anomaly detection on Latitude, Longitude, Elevation, and Gravity.
-    Returns data points with their anomaly status (-1 for anomaly, 1 for normal).
+    Performs anomaly detection using Isolation Forest on 'latitude', 'longitude', 'elevation', and 'gravity'.
+    Returns data points along with an 'anomaly' flag (-1 for anomaly, 1 for normal).
     """
     if not (0 < contamination < 0.5):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Contamination must be between 0 and 0.5.")
 
     features = df[['latitude', 'longitude', 'elevation', 'gravity']]
     try:
-        iso = IsolationForest(contamination=contamination, random_state=42)
-        df["anomaly"] = iso.fit_predict(features)
-        await application_db.update_gravity_data(df[['id', 'anomaly']])  # Update only the anomaly column
+        iso_forest = IsolationForest(contamination=contamination, random_state=42)
+        df['anomaly'] = iso_forest.fit_predict(features)
+        await application_db.update_gravity_data(df[['id', 'anomaly']]) # Update only the anomaly column
         return df[['latitude', 'longitude', 'elevation', 'gravity', 'anomaly']].to_dict(orient="records")
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Isolation Forest anomaly detection failed: {e}")
 
-@app_router.get("/plot-map-bouguer/", response_model=PlotlyGraph, summary="Generate Bouguer Anomaly Map")
-async def plot_map_bouguer(df: pd.DataFrame = Depends(get_dataframe_dependency)):
+@app_router.get("/earthquakes/", response_model=List[Dict[str, Any]], summary="Retrieve Earthquake Data")
+async def get_earthquakes_api(
+    start_date: datetime,
+    end_date: datetime,
+    min_mag: Optional[float] = None,
+    max_mag: Optional[float] = None,
+    min_depth: Optional[float] = None,
+    max_depth: Optional[float] = None
+):
     """
-    Generates a Plotly scatter map visualizing the Bouguer anomaly.
-    Requires 'latitude', 'longitude', and 'bouguer' columns.
+    Retrieves earthquake data within a specified date range and optional magnitude/depth filters.
+    """
+    query = EarthquakeQuery(
+        start_date=start_date,
+        end_date=end_date,
+        min_mag=min_mag,
+        max_mag=max_mag,
+        min_depth=min_depth,
+        max_depth=max_depth
+    )
+    earthquake_data = await application_db.get_earthquakes(query)
+    if not earthquake_data:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No earthquake data found for the given criteria.")
+    return earthquake_data
+
+@app_router.get("/gravity-heatmap/", response_model=PlotlyGraph, summary="Generate Gravity Heatmap")
+async def generate_gravity_heatmap(df: pd.DataFrame = Depends(get_dataframe_dependency)):
+    """
+    Generates an interactive heatmap of gravity anomalies.
+    Requires processed data with 'bouguer' anomalies.
     """
     if 'bouguer' not in df.columns or df['bouguer'].isnull().all():
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Bouguer anomaly not calculated or all values are null. Please run /gravity/bouguer-anomaly first.")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Bouguer anomaly data not available. Please run /bouguer-anomaly/ first.")
 
-    fig = px.scatter_map(
-        df,
-        lat="latitude",
-        lon="longitude",
-        color="bouguer",
-        title="Bouguer Anomaly Map",
-        color_continuous_scale=px.colors.sequential.Viridis,
-        hover_name="bouguer",
-        hover_data={"latitude": True, "longitude": True, "elevation": True, "gravity": True, "bouguer": True},
-        map_style="open-street-map",
-        zoom=6
+    # Create a grid for interpolation
+    lat_min, lat_max = df['latitude'].min(), df['latitude'].max()
+    lon_min, lon_max = df['longitude'].min(), df['longitude'].max()
+
+    grid_lat, grid_lon = np.mgrid[lat_min:lat_max:100j, lon_min:lon_max:100j]
+    grid_bouguer = griddata(
+        (df['latitude'], df['longitude']),
+        df['bouguer'],
+        (grid_lat, grid_lon),
+        method='cubic' # or 'linear', 'nearest'
     )
-    # Return Plotly graph as JSON
+
+    fig = go.Figure(data=go.Contour(
+        z=grid_bouguer,
+        x=grid_lon[0,:],
+        y=grid_lat[:,0],
+        colorscale='Jet',
+        colorbar=dict(title='Bouguer Anomaly (mGal)'),
+        line_smoothing=0.85 # Smooth the contours
+    ))
+
+    fig.update_layout(
+        title='Bouguer Anomaly Heatmap',
+        xaxis_title='Longitude',
+        yaxis_title='Latitude',
+        height=600,
+        width=800
+    )
+
     return PlotlyGraph(**json.loads(fig.to_json()))
 
-@app_router.get("/plot-map-anomaly/", response_model=PlotlyGraph, summary="Generate Anomaly Detection Map")
-async def plot_map_anomaly(df: pd.DataFrame = Depends(get_dataframe_dependency)):
+@app_router.get("/cluster-map/", response_model=PlotlyGraph, summary="Generate K-Means Cluster Map")
+async def generate_cluster_map(df: pd.DataFrame = Depends(get_dataframe_dependency)):
     """
-    Generates a Plotly scatter map visualizing the anomaly detection results.
-    Requires 'latitude', 'longitude', and 'anomaly' columns.
-    """
-    if 'anomaly' not in df.columns or df['anomaly'].isnull().all():
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Anomaly detection not performed or all values are null. Please run /gravity/anomaly-detection first.")
-
-    fig = px.scatter_map(
-        df,
-        lat="latitude",
-        lon="longitude",
-        color="anomaly",
-        color_discrete_map={-1: "red", 1: "blue"},  # -1 = anomaly, 1 = normal
-        title="Gravity Anomaly Detection",
-        hover_name="anomaly",
-        hover_data={"latitude": True, "longitude": True, "elevation": True, "gravity": True, "anomaly": True},
-        map_style="open-street-map",
-        zoom=6
-    )
-    # Return Plotly graph as JSON
-    return PlotlyGraph(**json.loads(fig.to_json()))
-
-@app_router.get("/plot-map-clusters/", response_model=PlotlyGraph, summary="Generate K-Means Clustering Map")
-async def plot_map_clusters(df: pd.DataFrame = Depends(get_dataframe_dependency)):
-    """
-    Generates a Plotly scatter map visualizing the K-Means clustering results.
-    Requires 'latitude', 'longitude', and 'cluster' columns.
+    Generates an interactive scatter map showing K-Means clusters.
+    Requires data processed with K-Means clustering.
     """
     if 'cluster' not in df.columns or df['cluster'].isnull().all():
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="K-Means clustering not performed or all values are null. Please run /gravity/kmeans-clusters first.")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cluster data not available. Please run /kmeans-clusters/ first.")
 
-    fig = px.scatter_map(
+    fig = px.scatter_mapbox(
         df,
         lat="latitude",
         lon="longitude",
         color="cluster",
-        title="Gravity Data K-Means Clusters",
-        hover_name="cluster",
-        hover_data={"latitude": True, "longitude": True, "elevation": True, "gravity": True, "cluster": True},
-        map_style="open-street-map",
-        zoom=6
+        size_max=10,
+        zoom=3,
+        mapbox_style="open-street-map",
+        title="K-Means Clustering of Gravity Data",
+        hover_name="id"
     )
-    # Return Plotly graph as JSON
+
+    fig.update_layout(height=600, width=800)
     return PlotlyGraph(**json.loads(fig.to_json()))
 
-@app_router.get("/interpolate-gravity/", response_model=PlotlyGraph, summary="Generate Interpolated Gravity Map")
-async def interpolate_gravity(
-    grid_resolution: int = 100,
-    df: pd.DataFrame = Depends(get_dataframe_dependency)
+@app_router.get("/anomaly-map/", response_model=PlotlyGraph, summary="Generate Anomaly Detection Map")
+async def generate_anomaly_map(df: pd.DataFrame = Depends(get_dataframe_dependency)):
+    """
+    Generates an interactive scatter map showing anomaly detection results.
+    Highlights anomalous data points.
+    Requires data processed with anomaly detection.
+    """
+    if 'anomaly' not in df.columns or df['anomaly'].isnull().all():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Anomaly detection data not available. Please run /anomaly-detection/ first.")
+
+    # Map anomaly values to colors for better visualization
+    df['anomaly_color'] = df['anomaly'].map({1: 'blue', -1: 'red'}) # -1 is anomaly, 1 is normal
+
+    fig = px.scatter_mapbox(
+        df,
+        lat="latitude",
+        lon="longitude",
+        color="anomaly_color",
+        size_max=10,
+        zoom=3,
+        mapbox_style="open-street-map",
+        title="Gravity Data Anomaly Detection",
+        hover_name="id",
+        color_discrete_map={'blue': 'Normal', 'red': 'Anomaly'} # Legend mapping
+    )
+
+    fig.update_layout(height=600, width=800)
+    return PlotlyGraph(**json.loads(fig.to_json()))
+
+
+# --- Q&A Endpoints (qna_router) ---
+
+@qna_router.post("/questions/", response_model=QuestionResponse, status_code=status.HTTP_201_CREATED, summary="Create a new question")
+async def create_new_question(
+    question: QuestionCreate,
+    session: AsyncSession = Depends(get_db_session),
+    current_user: dict = Depends(get_current_user) # Requires authentication
 ):
     """
-    Interpolates gravity data and generates a contour map.
-    Requires 'latitude', 'longitude', and 'gravity' columns.
+    Creates a new question in the Q&A forum.
+    The user sending the request is automatically set as the author.
     """
-    if 'gravity' not in df.columns:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing 'gravity' column in data.")
+    try:
+        new_question_data = await application_db.create_question_db(session, question.text, current_user["id"])
+        # Fetch the complete question details including counts and comments
+        return await application_db.get_question_by_id_with_details(session, new_question_data.id)
+    except Exception as e:
+        await session.rollback()
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to create question: {e}")
+
+@qna_router.get("/questions/", response_model=List[QuestionResponse], summary="Get all questions with details")
+async def get_all_questions(session: AsyncSession = Depends(get_db_session)):
+    """
+    Retrieves all questions from the Q&A forum,
+    including their comments, like counts, and dislike counts.
+    """
+    try:
+        questions_with_details = await application_db.get_all_questions_with_details(session)
+        if not questions_with_details:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No questions found.")
+        return questions_with_details
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to retrieve questions: {e}")
+
+@qna_router.post("/questions/{question_id}/comments/", response_model=CommentResponse, status_code=status.HTTP_201_CREATED, summary="Add a comment to a question")
+async def add_comment_to_question(
+    question_id: str,
+    comment: CommentCreate,
+    session: AsyncSession = Depends(get_db_session),
+    current_user: dict = Depends(get_current_user) # Requires authentication
+):
+    """
+    Adds a new comment to a specific question.
+    """
+    # Optional: Verify question_id exists before adding comment
+    question_exists = await application_db.get_question_by_id_db(session, question_id)
+    if not question_exists:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Question not found.")
 
     try:
-        points = df[['latitude', 'longitude']].values
-        values = df['gravity'].values
-
-        # Create a grid for interpolation
-        lat_min, lat_max = df['latitude'].min(), df['latitude'].max()
-        lon_min, lon_max = df['longitude'].min(), df['longitude'].max()
-
-        grid_lat, grid_lon = np.mgrid[lat_min:lat_max:complex(grid_resolution),
-                                        lon_min:lon_max:complex(grid_resolution)]
-
-        # Interpolate the gravity values
-        grid_gravity = griddata(points, values, (grid_lat, grid_lon), method='cubic')
-
-        # Create the contour map
-        fig = go.Figure(data=go.Contour(
-            z=grid_gravity,
-            x=grid_lon[0, :],
-            y=grid_lat[:, 0],
-            colorscale='Viridis',
-            colorbar_title='Gravity (mGal)'
-        ))
-
-        fig.update_layout(
-            title='Interpolated Gravity Map',
-            xaxis_title='Longitude',
-            yaxis_title='Latitude',
-            geo_scope='world'  # Ensure the map is displayed globally
-        )
-        # Return Plotly graph as JSON
-        return PlotlyGraph(**json.loads(fig.to_json()))
+        new_comment_data = await application_db.create_comment_db(session, question_id, comment.text)
+        await session.commit()
+        return new_comment_data
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Gravity interpolation failed: {e}")
+        await session.rollback()
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to add comment: {e}")
 
-@app_router.get("/distance-from-point/", response_model=List[ProcessedGravityData], summary="Calculate Distance from a Reference Point")
-async def calculate_distance_from_point(
-    ref_lat: float,
-    ref_lon: float,
-    df: pd.DataFrame = Depends(get_dataframe_dependency)
+@qna_router.post("/questions/{question_id}/interact/", response_model=QuestionInteractionResponse, status_code=status.HTTP_201_CREATED, summary="Like or dislike a question")
+async def interact_with_question(
+    question_id: str,
+    interaction_type: LikeDislikeType, # Pydantic Enum for 'like' or 'dislike'
+    session: AsyncSession = Depends(get_db_session),
+    current_user: dict = Depends(get_current_user) # Requires authentication
 ):
     """
-    Calculates the Haversine distance of each data point from a specified reference latitude and longitude.
+    Allows a user to like or dislike a question.
+    If a user already has an interaction (like/dislike), it updates it.
     """
-    df['distance_km'] = df.apply(
-        lambda row: haversine(ref_lat, ref_lon, row['latitude'], row['longitude']),
-        axis=1
-    )
-    await application_db.update_gravity_data(df[['id', 'distance_km']])  # Update only the distance_km column
-    return df.to_dict(orient="records")
+    user_id = current_user["id"]
 
-@app_router.post("/earthquakes", summary="Fetch Earthquake Data")
-async def fetch_earthquakes(query: EarthquakeQuery):
+    # First, check if the question exists
+    question_exists = await application_db.get_question_by_id_db(session, question_id)
+    if not question_exists:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Question not found.")
+
+    # Check for existing interaction by this user on this question
+    existing_interaction = await application_db.get_user_question_interaction_db(session, user_id, question_id)
+
+    try:
+        if existing_interaction:
+            # If exists and type is the same, no change needed. Otherwise, update.
+            if existing_interaction.type == interaction_type.value:
+                return QuestionInteractionResponse(**existing_interaction._asdict()) # Return existing without change
+            else:
+                updated_interaction = await application_db.update_question_interaction_db(session, existing_interaction.id, interaction_type)
+                await session.commit()
+                return updated_interaction
+        else:
+            # No existing interaction, create a new one
+            new_interaction = await application_db.create_question_interaction_db(session, question_id, user_id, interaction_type)
+            await session.commit()
+            return new_interaction
+    except Exception as e:
+        await session.rollback()
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to interact with question: {e}")
+
+
+@qna_router.delete("/questions/{question_id}/interact/{interaction_id}", status_code=status.HTTP_204_NO_CONTENT, summary="Delete a question like/dislike interaction")
+async def delete_question_interaction(
+    question_id: str, # For validation, though not directly used in deletion query
+    interaction_id: str,
+    session: AsyncSession = Depends(get_db_session),
+    current_user: dict = Depends(get_current_user) # Requires authentication
+):
     """
-    Retrieves earthquake data based on specified filters.
+    Deletes a specific like/dislike interaction for a question.
+    A user can only delete their own interactions.
     """
-    rows = await application_db.get_earthquakes(query)  # Pass the 'query' object
-    return [
-        {
-            "id": row["id"],
-            "time": row["time"],
-            "mag": row["mag"],
-            "depth": row["depth"],
-            "place": row["place"],
-            "latitude": row["latitude"],
-            "longitude": row["longitude"]
-        }
-        for row in rows
-    ]
+    user_id = current_user["id"]
+
+    # First, verify that the interaction exists and belongs to the current user
+    interaction = await application_db.get_user_question_interaction_db(session, user_id, question_id)
+    if not interaction or interaction.id != interaction_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Interaction not found or you don't have permission to delete it.")
+
+    try:
+        await application_db.delete_question_interaction_db(session, interaction_id)
+        await session.commit()
+        return {"message": "Interaction deleted successfully"}
+    except Exception as e:
+        await session.rollback()
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to delete interaction: {e}")
+
+
+# --- Researcher Endpoints (researcher_router) ---
+
+@researcher_router.post("/", response_model=Researcher, status_code=status.HTTP_201_CREATED, summary="Create a new researcher entry")
+async def create_researcher(
+    researcher: Researcher,
+    session: AsyncSession = Depends(get_db_session),
+    current_user: dict = Depends(get_current_user) # Requires authentication
+):
+    """
+    Creates a new researcher entry (e.g., for a publication).
+    """
+    try:
+        new_researcher = await application_db.create_researcher_db(session, researcher.model_dump())
+        if not new_researcher:
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to create researcher entry.")
+        return Researcher(**new_researcher)
+    except Exception as e:
+        await session.rollback()
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to create researcher: {e}")
+
+@researcher_router.get("/", response_model=List[Researcher], summary="Get all researcher entries")
+async def get_all_researchers(
+    session: AsyncSession = Depends(get_db_session),
+    current_user: dict = Depends(get_current_user) # Requires authentication
+):
+    """
+    Retrieves all researcher entries.
+    """
+    try:
+        researchers_data = await application_db.get_all_researchers_db(session)
+        return [Researcher(**r) for r in researchers_data]
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to retrieve researchers: {e}")
+
+@researcher_router.get("/{researcher_id}", response_model=Researcher, summary="Get a researcher entry by ID")
+async def get_researcher_by_id(
+    researcher_id: str,
+    session: AsyncSession = Depends(get_db_session),
+    current_user: dict = Depends(get_current_user) # Requires authentication
+):
+    """
+    Retrieves a single researcher entry by its ID.
+    """
+    researcher = await application_db.get_researcher_by_id_db(session, researcher_id)
+    if not researcher:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Researcher not found.")
+    return Researcher(**researcher)
+
+@researcher_router.put("/{researcher_id}", response_model=Researcher, summary="Update a researcher entry")
+async def update_researcher(
+    researcher_id: str,
+    researcher_update: Researcher, # Use the full Researcher schema for updates
+    session: AsyncSession = Depends(get_db_session),
+    current_user: dict = Depends(get_current_user) # Requires authentication
+):
+    """
+    Updates an existing researcher entry.
+    """
+    existing_researcher = await application_db.get_researcher_by_id_db(session, researcher_id)
+    if not existing_researcher:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Researcher not found.")
+
+    update_data = researcher_update.model_dump(exclude_unset=True) # Get only fields that are set
+    if not update_data:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No fields provided for update.")
+
+    try:
+        updated_researcher = await application_db.update_researcher_db(session, researcher_id, update_data)
+        if not updated_researcher:
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to update researcher entry.")
+        return Researcher(**updated_researcher)
+    except Exception as e:
+        await session.rollback()
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to update researcher: {e}")
+
+@researcher_router.delete("/{researcher_id}", status_code=status.HTTP_204_NO_CONTENT, summary="Delete a researcher entry")
+async def delete_researcher(
+    researcher_id: str,
+    session: AsyncSession = Depends(get_db_session),
+    current_user: dict = Depends(get_current_user) # Requires authentication
+):
+    """
+    Deletes a researcher entry by its ID.
+    """
+    existing_researcher = await application_db.get_researcher_by_id_db(session, researcher_id)
+    if not existing_researcher:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Researcher not found.")
+
+    try:
+        deleted = await application_db.delete_researcher_db(session, researcher_id)
+        if not deleted:
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to delete researcher entry.")
+        return {"message": "Researcher deleted successfully"}
+    except Exception as e:
+        await session.rollback()
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to delete researcher: {e}")

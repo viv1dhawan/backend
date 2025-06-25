@@ -4,7 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 # Import database and create_table directly, as they are siblings
 from database import database, create_table
 # Import the APIRouters from app.py, which is a sibling
-from app import users_router, app_router
+from app import users_router, app_router, qna_router
 import uvicorn  # Import uvicorn
 
 # Define the lifespan context manager
@@ -49,14 +49,16 @@ app.add_middleware(
 # Include routers for different functionalities
 app.include_router(users_router, prefix="/users", tags=["Users"])
 app.include_router(app_router, prefix="/app_router", tags=["Geophysical Data"])
+app.include_router(qna_router, prefix="/qna_router", tags=["Q&A Forum "])
 
 @app.get("/", summary="Root endpoint")
 async def root():
     """
-    Root endpoint for the API.
+    Root endpoint for the API, returns a welcome message.
     """
     return {"message": "Welcome to the Geophysical Data API!"}
 
-# This block will only be executed when the script is run directly, not when imported
+# This block is typically for running the application directly with `python main.py`
+# For production deployment (e.g., with Gunicorn), you would use `uvicorn main:app --host 0.0.0.0 --port 8000`
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
+    uvicorn.run(app, host="0.0.0.0", port=8000)

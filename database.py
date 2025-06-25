@@ -9,29 +9,26 @@ import sqlalchemy
 DATABASE_URL_ASYNC = "postgresql+asyncpg://geoverse_user:UoeVIoXyhhWruxWADLyKZdcbhEbvD9n1@dpg-d159fj3e5dus739dr010-a.oregon-postgres.render.com/geoverse"
 DATABASE_URL_SYNC = "postgresql://geoverse_user:UoeVIoXyhhWruxWADLyKZdcbhEbvD9n1@dpg-d159fj3e5dus739dr010-a.oregon-postgres.render.com/geoverse"
 
-# Async engine for use with FastAPI and async operations
-# Change echo=True to echo=False to suppress SQLAlchemy engine logs
+# Async SQLAlchemy engine
 async_engine = create_async_engine(DATABASE_URL_ASYNC, echo=False)
 AsyncSessionLocal = sessionmaker(bind=async_engine, class_=AsyncSession, expire_on_commit=False)
 
-# Sync engine for reflection-based table loading (if needed, e.g., for Alembic migrations)
-# Change echo=True to echo=False to suppress SQLAlchemy engine logs
+# Sync engine for Alembic/migrations
 sync_engine = create_engine(DATABASE_URL_SYNC, echo=False)
 
-# Metadata object to store table definitions
+# Shared metadata
 metadata = MetaData()
 
-# Database object from 'databases' library for simpler async queries
+# Databases library for simple async querying
 database = Database(DATABASE_URL_ASYNC)
 
+# Create tables from metadata
 async def create_table():
-    """
-    Creates all tables defined in models.py if they do not already exist.
-    This function should be called during application startup.
-    """
     async with async_engine.begin() as conn:
-        # Import models here to ensure they are registered with metadata
-        # models is now a sibling file
-        import models
         await conn.run_sync(metadata.create_all)
-    print("Database tables created/checked.")
+    print("Tables checked/created.")
+
+# Dependency for FastAPI routes
+async def get_db_session():
+    async with AsyncSessionLocal() as session:
+        yield session
