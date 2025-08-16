@@ -1,10 +1,10 @@
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-# Import database and create_table directly, as they are siblings
-from database import database, create_table
+# Import create_table directly, as 'database' object is removed
+from database import create_table, async_engine # Import async_engine for connection/disconnection
 # Import the APIRouters from app.py, which is a sibling
-from app import users_router, app_router, qna_router
+from app import users_router, app_router, qna_router, researcher_router # Ensure all routers are imported
 import uvicorn  # Import uvicorn
 
 # Define the lifespan context manager
@@ -16,8 +16,10 @@ async def lifespan(app: FastAPI):
     and disconnects from the database on shutdown.
     """
     # Startup events
-    await database.connect()
-    await create_table()
+    # The engine is implicitly "connected" when AsyncSessionLocal is used.
+    # Explicitly calling async_engine.connect() here can lead to unclosed connections.
+    # The create_table() function already handles its own connection management.
+    await create_table() # This will ensure tables are created using a managed connection
     print("Database connected and tables checked/created.")
 
     # Print the Swagger UI URL on startup
@@ -27,7 +29,7 @@ async def lifespan(app: FastAPI):
     
     yield
     # Shutdown events
-    await database.disconnect()
+    await async_engine.dispose() # Dispose the engine's connection pool
     print("Database disconnected.")
 
 app = FastAPI(
@@ -50,6 +52,7 @@ app.add_middleware(
 app.include_router(users_router, prefix="/users", tags=["Users"])
 app.include_router(app_router, prefix="/app_router", tags=["Geophysical Data"])
 app.include_router(qna_router, prefix="/qna_router", tags=["Q&A Forum "])
+app.include_router(researcher_router, prefix="/researchers", tags=["Researchers"]) # Include the new researcher router
 
 @app.get("/", summary="Root endpoint")
 async def root():

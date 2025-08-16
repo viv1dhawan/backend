@@ -27,7 +27,7 @@ from Schema.application_schema import EarthquakeQuery, GravityDataPoint, Process
 from Schema.application_schema import QuestionCreate, QuestionResponse, CommentCreate, CommentResponse, LikeDislikeType, QuestionInteractionResponse
 
 # Import database session factory (assuming it's defined in database.py)
-from database import database, get_db_session # Your async database connection setup
+from database import get_db_session # Only get_db_session is needed now
 from sqlalchemy.ext.asyncio import AsyncSession # Crucial for type hinting async sessions
 
 # Define API Routers
@@ -57,7 +57,10 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
 
-async def get_current_user(token: str = Depends(oauth2_scheme)) -> Dict[str, Any]:
+async def get_current_user(
+    token: str = Depends(oauth2_scheme),
+    session: AsyncSession = Depends(get_db_session) # Inject session here
+) -> Dict[str, Any]:
     """
     Authenticates and retrieves the current user based on the provided JWT token.
     """
@@ -69,7 +72,7 @@ async def get_current_user(token: str = Depends(oauth2_scheme)) -> Dict[str, Any
         email: str = payload.get("sub")
         if email is None:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
-        current_user = await user_db.get_user_by_email(email)
+        current_user = await user_db.get_user_by_email(session, email) # Pass session
         if not current_user:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
         return current_user
@@ -79,25 +82,31 @@ async def get_current_user(token: str = Depends(oauth2_scheme)) -> Dict[str, Any
 # --- User Management Endpoints (users_router) ---
 
 @users_router.post("/signup", response_model=UserOut, summary="Register a new user")
-async def signup(user: UserCreate):
+async def signup(
+    user: UserCreate,
+    session: AsyncSession = Depends(get_db_session) # Inject session
+):
     """
     Registers a new user with first name, last name, email, and password.
     Hashes the password and sets is_verified to False.
     """
-    existing_user = await user_db.get_user_by_email(user.email)
+    existing_user = await user_db.get_user_by_email(session, user.email) # Pass session
     if existing_user:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email already registered")
 
-    created_user_data = await user_db.create_user(user.model_dump())
+    created_user_data = await user_db.create_user(session, user.model_dump()) # Pass session
     return UserOut(**created_user_data)
 
 @users_router.post("/token", summary="Authenticate user and get access token")
-async def login(form_data: OAuth2PasswordRequestForm = Depends()):
+async def login(
+    form_data: OAuth2PasswordRequestForm = Depends(),
+    session: AsyncSession = Depends(get_db_session) # Inject session
+):
     """
     Authenticates a user with username (email) and password,
     and returns an access token upon successful login.
     """
-    current_user = await user_db.get_user_by_email(form_data.username)
+    current_user = await user_db.get_user_by_email(session, form_data.username) # Pass session
     if not current_user or not user_db.verify_password(form_data.password, current_user["hashed_password"]):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Incorrect username or password")
 
@@ -105,53 +114,65 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()):
     return {"access_token": access_token, "token_type": "bearer"}
 
 @users_router.post("/password-reset-request", summary="Request a password reset token")
-async def password_reset_request(request: PasswordResetRequest):
+async def password_reset_request(
+    request: PasswordResetRequest,
+    session: AsyncSession = Depends(get_db_session) # Inject session
+):
     """
     Requests a password reset token for a given email.
     A token will be generated and (simulated) sent to the user's email.
     """
-    current_user = await user_db.get_user_by_email(request.email)
+    current_user = await user_db.get_user_by_email(session, request.email) # Pass session
     if not current_user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
-    token = await user_db.create_password_reset_token(current_user["email"])
+    token = await user_db.create_password_reset_token(session, current_user["email"]) # Pass session
     # In a real application, you would send this token via email
     print(f"Password reset token for {request.email}: {token}")  # For testing/development
     return {"message": "Password reset token generated and (simulated) sent to email.", "token": token}
 
 @users_router.post("/password-reset", summary="Reset user password with token")
-async def password_reset(password_reset_data: PasswordReset):
+async def password_reset(
+    password_reset_data: PasswordReset,
+    session: AsyncSession = Depends(get_db_session) # Inject session
+):
     """
     Resets a user's password using the provided token and new password.
     """
-    email = await user_db.verify_password_reset_token(password_reset_data.token)
+    email = await user_db.verify_password_reset_token(session, password_reset_data.token) # Pass session
     if not email:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired token")
-    await user_db.update_password(email, password_reset_data.new_password)
+    await user_db.update_password(session, email, password_reset_data.new_password) # Pass session
     return {"message": "Password updated successfully"}
 
 @users_router.post("/request-email-verification/", summary="Request email verification token")
-async def request_email_verification(request: EmailVerificationRequest):
+async def request_email_verification(
+    request: EmailVerificationRequest,
+    session: AsyncSession = Depends(get_db_session) # Inject session
+):
     """
     Requests an email verification token for a given email.
     In a real app, this would send an email with the token.
     """
-    current_user = await user_db.get_user_by_email(request.email)
+    current_user = await user_db.get_user_by_email(session, request.email) # Pass session
     if not current_user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
     if current_user["is_verified"]:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email already verified")
 
-    token = await user_db.generate_verification_token(request.email)
+    token = await user_db.generate_verification_token(session, request.email) # Pass session
     # Here you would integrate with an email sending service
     print(f"Email verification token for {request.email}: {token}")
     return {"message": "Verification token generated and (simulated) sent to email."}
 
 @users_router.post("/verify-email/", summary="Verify user email with token")
-async def verify_email_with_token(verification: EmailVerification):
+async def verify_email_with_token(
+    verification: EmailVerification,
+    session: AsyncSession = Depends(get_db_session) # Inject session
+):
     """
     Verifies a user's email using the provided token.
     """
-    is_verified = await user_db.verify_user_with_token(verification.token)
+    is_verified = await user_db.verify_user_with_token(session, verification.token) # Pass session
     if not is_verified:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired verification token.")
     return {"message": "Email successfully verified."}
@@ -166,7 +187,8 @@ async def get_user_me(current_user: dict = Depends(get_current_user)):
 @users_router.put("/me", response_model=UserOut, summary="Update current user's details")
 async def update_user_details(
     user_update: UserUpdate,
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session) # Inject session
 ):
     """
     Updates the details of the currently authenticated user.
@@ -176,24 +198,26 @@ async def update_user_details(
     updated_fields = user_update.model_dump(exclude_unset=True)  # Get only fields that are set
 
     if "new_password" in updated_fields and updated_fields["new_password"]:
-        await user_db.update_password(user_email, updated_fields.pop("new_password"))
+        await user_db.update_password(session, user_email, updated_fields.pop("new_password")) # Pass session
 
     if updated_fields:  # Update other fields if any remain
-        await user_db.update_user_details(user_email, updated_fields)
+        await user_db.update_user_details(session, user_email, updated_fields) # Pass session
 
     # Fetch the updated user to return the latest state
-    updated_user = await user_db.get_user_by_email(user_email)
+    updated_user = await user_db.get_user_by_email(session, user_email) # Pass session
     if not updated_user:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to retrieve updated user data.")
     return UserOut(**updated_user)
 
 @users_router.get("/", response_model=List[UserOut], summary="Get all registered users (Admin only)")
-async def list_users():
+async def list_users(
+    session: AsyncSession = Depends(get_db_session) # Inject session
+):
     """
     Retrieves a list of all registered users.
     (Note: In a production application, this endpoint should be protected by admin authentication.)
     """
-    users_data = await user_db.get_all_users()
+    users_data = await user_db.get_all_users(session) # Pass session
     return [UserOut(**user) for user in users_data]
 
 # --- Constants for calculations ---
@@ -201,12 +225,14 @@ RHO = 2670  # kg/m³ for Bouguer correction
 EARTH_RADIUS_KM = 6371  # Earth's radius in kilometers for Haversine formula
 
 # --- Dependency to get the DataFrame and ensure it's loaded ---
-async def get_dataframe_dependency() -> pd.DataFrame:
+async def get_dataframe_dependency(
+    session: AsyncSession = Depends(get_db_session) # Inject session
+) -> pd.DataFrame:
     """
     Dependency function to retrieve the gravity data DataFrame from the database.
     Raises HTTPException if no data is loaded.
     """
-    df = await application_db.get_gravity_data()
+    df = await application_db.get_gravity_data(session) # Pass session
     if df.empty:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No gravity data loaded. Please upload data first.")
     return df
@@ -226,7 +252,10 @@ def haversine(lat1, lon1, lat2, lon2):
 # --- Gravity Data Endpoints (app_router) ---
 
 @app_router.post("/upload-data/", response_model=UploadResponse, summary="Upload Gravity Data CSV")
-async def upload_gravity_data(file: UploadFile = File(...)):
+async def upload_gravity_data(
+    file: UploadFile = File(...),
+    session: AsyncSession = Depends(get_db_session) # Inject session
+):
     """
     Uploads a CSV file containing gravity data.
     The CSV must have 'latitude', 'longitude', and 'gravity' columns.
@@ -236,7 +265,7 @@ async def upload_gravity_data(file: UploadFile = File(...)):
 
     try:
         contents = await file.read()
-        row_count = await application_db.load_gravity_data_from_csv(contents)
+        row_count = await application_db.load_gravity_data_from_csv(session, contents) # Pass session
         return UploadResponse(message=f"Successfully uploaded {file.filename}", row_count=row_count)
     except ValueError as ve:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(ve))
@@ -251,15 +280,20 @@ async def get_all_gravity_data_api(df: pd.DataFrame = Depends(get_dataframe_depe
     return df.to_dict(orient="records")
 
 @app_router.post("/clear-data/", summary="Clear All Loaded Gravity Data")
-async def clear_all_gravity_data_api():
+async def clear_all_gravity_data_api(
+    session: AsyncSession = Depends(get_db_session) # Inject session
+):
     """
     Clears all gravity data currently loaded in the database.
     """
-    await application_db.clear_gravity_data()
+    await application_db.clear_gravity_data(session) # Pass session
     return {"message": "All gravity data cleared from the database."}
 
 @app_router.get("/bouguer-anomaly/", response_model=List[ProcessedGravityData], summary="Calculate Bouguer Anomaly")
-async def calculate_bouguer_anomaly(df: pd.DataFrame = Depends(get_dataframe_dependency)):
+async def calculate_bouguer_anomaly(
+    df: pd.DataFrame = Depends(get_dataframe_dependency),
+    session: AsyncSession = Depends(get_db_session) # Inject session
+):
     """
     Calculates the Bouguer anomaly for the loaded gravity data.
     Requires 'elevation' and 'gravity' columns.
@@ -269,13 +303,14 @@ async def calculate_bouguer_anomaly(df: pd.DataFrame = Depends(get_dataframe_dep
 
     # Apply Bouguer correction
     df["bouguer"] = df["gravity"] - (0.3086 * df["elevation"]) + (0.0419 * (RHO / 1000) * df["elevation"])
-    await application_db.update_gravity_data(df[['id', 'bouguer']]) # Update only the bouguer column
+    await application_db.update_gravity_data(session, df[['id', 'bouguer']]) # Pass session
     return df.to_dict(orient="records")
 
 @app_router.get("/kmeans-clusters/", response_model=List[ClusteringResult], summary="Perform K-Means Clustering")
 async def perform_kmeans_clustering(
     n_clusters: int = 3,
-    df: pd.DataFrame = Depends(get_dataframe_dependency)
+    df: pd.DataFrame = Depends(get_dataframe_dependency),
+    session: AsyncSession = Depends(get_db_session) # Inject session
 ):
     """
     Performs K-Means clustering on Latitude, Longitude, Elevation, and Gravity.
@@ -288,7 +323,7 @@ async def perform_kmeans_clustering(
     try:
         kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
         df['cluster'] = kmeans.fit_predict(features)
-        await application_db.update_gravity_data(df[['id', 'cluster']]) # Update only the cluster column
+        await application_db.update_gravity_data(session, df[['id', 'cluster']]) # Pass session
         return df[['latitude', 'longitude', 'elevation', 'gravity', 'cluster']].to_dict(orient="records")
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"K-Means clustering failed: {e}")
@@ -296,7 +331,8 @@ async def perform_kmeans_clustering(
 @app_router.get("/anomaly-detection/", response_model=List[AnomalyDetectionResult], summary="Perform Isolation Forest Anomaly Detection")
 async def perform_anomaly_detection(
     contamination: float = 0.05,
-    df: pd.DataFrame = Depends(get_dataframe_dependency)
+    df: pd.DataFrame = Depends(get_dataframe_dependency),
+    session: AsyncSession = Depends(get_db_session) # Inject session
 ):
     """
     Performs anomaly detection using Isolation Forest on 'latitude', 'longitude', 'elevation', and 'gravity'.
@@ -309,7 +345,7 @@ async def perform_anomaly_detection(
     try:
         iso_forest = IsolationForest(contamination=contamination, random_state=42)
         df['anomaly'] = iso_forest.fit_predict(features)
-        await application_db.update_gravity_data(df[['id', 'anomaly']]) # Update only the anomaly column
+        await application_db.update_gravity_data(session, df[['id', 'anomaly']]) # Pass session
         return df[['latitude', 'longitude', 'elevation', 'gravity', 'anomaly']].to_dict(orient="records")
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Isolation Forest anomaly detection failed: {e}")
@@ -321,7 +357,8 @@ async def get_earthquakes_api(
     min_mag: Optional[float] = None,
     max_mag: Optional[float] = None,
     min_depth: Optional[float] = None,
-    max_depth: Optional[float] = None
+    max_depth: Optional[float] = None,
+    session: AsyncSession = Depends(get_db_session) # Inject session
 ):
     """
     Retrieves earthquake data within a specified date range and optional magnitude/depth filters.
@@ -334,7 +371,7 @@ async def get_earthquakes_api(
         min_depth=min_depth,
         max_depth=max_depth
     )
-    earthquake_data = await application_db.get_earthquakes(query)
+    earthquake_data = await application_db.get_earthquakes(session, query) # Pass session
     if not earthquake_data:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No earthquake data found for the given criteria.")
     return earthquake_data
@@ -548,7 +585,7 @@ async def delete_question_interaction(
     # First, verify that the interaction exists and belongs to the current user
     interaction = await application_db.get_user_question_interaction_db(session, user_id, question_id)
     if not interaction or interaction.id != interaction_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Interaction not found or you don't have permission to delete it.")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUDN, detail="Interaction not found or you don't have permission to delete it.")
 
     try:
         await application_db.delete_question_interaction_db(session, interaction_id)
@@ -655,3 +692,4 @@ async def delete_researcher(
     except Exception as e:
         await session.rollback()
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to delete researcher: {e}")
+

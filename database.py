@@ -1,36 +1,42 @@
 # database.py
-
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
-from sqlalchemy import MetaData
+from sqlalchemy import create_engine, MetaData
 from sqlalchemy.orm import sessionmaker
-from databases import Database
 import sqlalchemy
 
-# Use your actual Railway DB URL with sslmode=require
-DATABASE_URL = "postgresql://postgres:fDoLIsfYMxEhRMQOnnRqpGUhKdKLafKl@yamabiko.proxy.rlwy.net:56650/railway"
+# Configuration for your MySQL database
+# Use the connection string provided by the user
+DATABASE_URL_ASYNC = "mysql+aiomysql://root:EYDIQLYoErENIIPBMucXrLEHRJmtuEVO@shortline.proxy.rlwy.net:52270/railway"
+DATABASE_URL_SYNC = "mysql+mysqlconnector://root:EYDIQLYoErENIIPBMucXrLEHRJmtuEVO@shortline.proxy.rlwy.net:52270/railway"
 
-# Async URLs for asyncpg + sqlalchemy
-DATABASE_URL_ASYNC = DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://") + "?sslmode=require"
-
-# Async SQLAlchemy engine & session
+# Async SQLAlchemy engine
+# 'aiomysql' is used for async, as 'mysql-connector-python-async' needs specific dialect
+# For sync, 'mysqlconnector' is a common choice
 async_engine = create_async_engine(DATABASE_URL_ASYNC, echo=False)
 AsyncSessionLocal = sessionmaker(bind=async_engine, class_=AsyncSession, expire_on_commit=False)
 
-# Shared metadata (should be used in your models)
+# Sync engine for Alembic/migrations or simple sync operations (if needed)
+sync_engine = create_engine(DATABASE_URL_SYNC, echo=False)
+
+# Shared metadata
 metadata = MetaData()
 
-# Optional: `databases` library for async queries
-database = Database(DATABASE_URL_ASYNC)
-
-#  Create tables (run once at startup)
+# Create tables from metadata
 async def create_table():
-    #  Ensure all your models are imported before this line
-    import models  # Adjust based on your actual models file
+    """
+    Creates database tables based on the defined metadata.
+    This function should be called during application startup.
+    """
     async with async_engine.begin() as conn:
+        # Use run_sync to execute synchronous DDL operations within an async context
         await conn.run_sync(metadata.create_all)
-    print(" Tables checked/created.")
+    print("Tables checked/created.")
 
-#  FastAPI dependency
+# Dependency for FastAPI routes to get an async database session
 async def get_db_session():
+    """
+    Dependency that provides an AsyncSession for database interactions.
+    The session is automatically closed after the request.
+    """
     async with AsyncSessionLocal() as session:
         yield session
