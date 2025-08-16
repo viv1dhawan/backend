@@ -1,35 +1,32 @@
 # database.py
+
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy import create_engine, MetaData
 from sqlalchemy.orm import sessionmaker
 from databases import Database
-import sqlalchemy
-import os
 
-# Use environment variable for security (recommended for production)
-# For now, you can hardcode your Railway connection string with sslmode
-DATABASE_URL_BASE = "postgresql://your_user:your_password@your_host:your_port/your_db"
-DATABASE_URL_ASYNC = f"postgresql+asyncpg://your_user:your_password@your_host:your_port/your_db?sslmode=require"
-DATABASE_URL_SYNC = f"{DATABASE_URL_BASE}?sslmode=require"
+# Railway PostgreSQL connection string
+DATABASE_URL_ASYNC = "postgresql+asyncpg://postgres:fDoLIsfYMxEhRMQOnnRqpGUhKdKLafKl@yamabiko.proxy.rlwy.net:56650/railway?sslmode=require"
+DATABASE_URL_SYNC = "postgresql://postgres:fDoLIsfYMxEhRMQOnnRqpGUhKdKLafKl@yamabiko.proxy.rlwy.net:56650/railway?sslmode=require"
 
-# Async SQLAlchemy engine
+# Async engine for SQLAlchemy
 async_engine = create_async_engine(DATABASE_URL_ASYNC, echo=False)
 AsyncSessionLocal = sessionmaker(bind=async_engine, class_=AsyncSession, expire_on_commit=False)
 
-# Sync engine for Alembic/migrations
+# Sync engine for Alembic migrations
 sync_engine = create_engine(DATABASE_URL_SYNC, echo=False)
 
-# Shared metadata
+# Shared metadata (used to define tables/models)
 metadata = MetaData()
 
-# Databases library (good for simple queries)
+# Simple async query interface using the `databases` library
 database = Database(DATABASE_URL_ASYNC)
 
-# Create tables
+# Utility to create all tables
 async def create_table():
     async with async_engine.begin() as conn:
         await conn.run_sync(metadata.create_all)
-    print("Tables checked/created.")
+    print("Tables created or already exist.")
 
 # Dependency injection for FastAPI
 async def get_db_session():
