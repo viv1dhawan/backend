@@ -66,7 +66,7 @@ async def get_user_by_email(session: AsyncSession, email: str) -> Optional[Dict[
     query = users.select().where(users.c.email == email)
     result = await session.execute(query)
     user_record = result.first()
-    return dict(user_record) if user_record else None
+    return user_record._asdict() if user_record else None # Changed to ._asdict()
 
 async def get_user_by_id(session: AsyncSession, user_id: int) -> Optional[Dict[str, Any]]:
     """
@@ -80,7 +80,7 @@ async def get_user_by_id(session: AsyncSession, user_id: int) -> Optional[Dict[s
     query = users.select().where(users.c.id == user_id)
     result = await session.execute(query)
     user_record = result.first()
-    return dict(user_record) if user_record else None
+    return user_record._asdict() if user_record else None # Changed to ._asdict()
 
 async def update_user_details(session: AsyncSession, email: str, updated_fields: Dict[str, Any]) -> None:
     """
@@ -130,7 +130,7 @@ async def get_all_users(session: AsyncSession) -> List[Dict[str, Any]]:
     query = users.select()
     result = await session.execute(query)
     user_records = result.fetchall()
-    return [dict(record) for record in user_records]
+    return [record._asdict() for record in user_records] # Changed to ._asdict()
 
 # --- Password Reset Token Operations ---
 async def create_password_reset_token(session: AsyncSession, email: str) -> str:
@@ -176,9 +176,9 @@ async def verify_password_reset_token(session: AsyncSession, token: str) -> Opti
     token_record = result.first()
 
     if token_record:
-        email = token_record["email"]
+        email = token_record._asdict()["email"] # Changed to ._asdict()
         # Invalidate the token after successful verification/use
-        delete_query = password_reset_tokens.delete().where(password_reset_tokens.c.id == token_record["id"])
+        delete_query = password_reset_tokens.delete().where(password_reset_tokens.c.id == token_record._asdict()["id"]) # Changed to ._asdict()
         await session.execute(delete_query)
         await session.commit()
         return email
@@ -228,13 +228,13 @@ async def verify_user_with_token(session: AsyncSession, token: str) -> bool:
     token_record = result.first()
 
     if token_record:
-        email = token_record["email"]
+        email = token_record._asdict()["email"] # Changed to ._asdict()
         # Update user's is_verified status
         update_query = users.update().where(users.c.email == email).values(is_verified=True, updated_at=datetime.utcnow())
         await session.execute(update_query)
 
         # Invalidate the token
-        delete_query = email_verification_tokens.delete().where(email_verification_tokens.c.id == token_record["id"])
+        delete_query = email_verification_tokens.delete().where(email_verification_tokens.c.id == token_record._asdict()["id"]) # Changed to ._asdict()
         await session.execute(delete_query)
         await session.commit()
         return True
