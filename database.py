@@ -4,10 +4,13 @@ from sqlalchemy import create_engine, MetaData
 from sqlalchemy.orm import sessionmaker
 from databases import Database
 import sqlalchemy
+import os
 
-# Configuration for your PostgreSQL database
-DATABASE_URL_ASYNC = "postgresql+asyncpg://geoverse_user:UoeVIoXyhhWruxWADLyKZdcbhEbvD9n1@dpg-d159fj3e5dus739dr010-a.oregon-postgres.render.com/geoverse"
-DATABASE_URL_SYNC = "postgresql://geoverse_user:UoeVIoXyhhWruxWADLyKZdcbhEbvD9n1@dpg-d159fj3e5dus739dr010-a.oregon-postgres.render.com/geoverse"
+# Use environment variable for security (recommended for production)
+# For now, you can hardcode your Railway connection string with sslmode
+DATABASE_URL_BASE = "postgresql://your_user:your_password@your_host:your_port/your_db"
+DATABASE_URL_ASYNC = f"postgresql+asyncpg://your_user:your_password@your_host:your_port/your_db?sslmode=require"
+DATABASE_URL_SYNC = f"{DATABASE_URL_BASE}?sslmode=require"
 
 # Async SQLAlchemy engine
 async_engine = create_async_engine(DATABASE_URL_ASYNC, echo=False)
@@ -19,16 +22,16 @@ sync_engine = create_engine(DATABASE_URL_SYNC, echo=False)
 # Shared metadata
 metadata = MetaData()
 
-# Databases library for simple async querying
+# Databases library (good for simple queries)
 database = Database(DATABASE_URL_ASYNC)
 
-# Create tables from metadata
+# Create tables
 async def create_table():
     async with async_engine.begin() as conn:
         await conn.run_sync(metadata.create_all)
     print("Tables checked/created.")
 
-# Dependency for FastAPI routes
+# Dependency injection for FastAPI
 async def get_db_session():
     async with AsyncSessionLocal() as session:
         yield session
