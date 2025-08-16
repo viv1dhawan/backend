@@ -6,19 +6,23 @@ import sqlalchemy
 from datetime import datetime
 from typing import List, Optional, Dict, Any
 from sqlalchemy.ext.asyncio import AsyncSession # Import AsyncSession
-from sqlalchemy import select, desc, func, and_ # Import necessary SQLAlchemy functions
+from sqlalchemy import select, desc, func, and_, insert, delete, update # Import necessary SQLAlchemy functions
 
 from Schema.application_schema import CommentCreate, CommentResponse, EarthquakeQuery, QuestionCreate, QuestionResponse, LikeDislikeType, QuestionInteractionResponse, Researcher # Import CommentCreate and LikeDislikeType
-from database import database
 from models import gravity_data, earthquakes, questions, comments, question_likes, users, researchers # Import all models used
 
 # --- Gravity Data Operations ---
 
-async def load_gravity_data_from_csv(csv_contents: bytes) -> int:
+async def load_gravity_data_from_csv(session: AsyncSession, csv_contents: bytes) -> int:
     """
     Loads gravity data from a CSV file into the database.
     Assumes CSV has 'latitude', 'longitude', 'elevation', 'gravity' columns.
     Clears existing gravity data before inserting new data.
+    Args:
+        session (AsyncSession): The database session.
+        csv_contents (bytes): The content of the CSV file.
+    Returns:
+        int: The number of rows inserted.
     """
     df = pd.read_csv(io.BytesIO(csv_contents))
 
@@ -34,20 +38,26 @@ async def load_gravity_data_from_csv(csv_contents: bytes) -> int:
     records_to_insert = df[required_columns].to_dict(orient="records")
 
     # Clear existing data before bulk insert
-    await clear_gravity_data()
+    await clear_gravity_data(session)
 
     # Bulk insert the new data
     if records_to_insert:
         query = gravity_data.insert()
-        await database.execute_many(query, records_to_insert)
+        await session.execute(query, records_to_insert) # execute_many is used by passing a list of dicts to execute()
+        await session.commit()
     return len(records_to_insert)
 
-async def get_gravity_data() -> pd.DataFrame:
+async def get_gravity_data(session: AsyncSession) -> pd.DataFrame:
     """
     Retrieves all gravity data from the database and returns it as a Pandas DataFrame.
+    Args:
+        session (AsyncSession): The database session.
+    Returns:
+        pd.DataFrame: A DataFrame containing all gravity data.
     """
     query = gravity_data.select()
-    records = await database.fetch_all(query)
+    result = await session.execute(query)
+    records = result.fetchall()
     if not records:
         # Return an empty DataFrame with all expected columns to maintain consistent schema
         return pd.DataFrame(columns=['id', 'latitude', 'longitude', 'elevation', 'gravity', 'bouguer', 'cluster', 'anomaly', 'distance_km'])
@@ -56,28 +66,35 @@ async def get_gravity_data() -> pd.DataFrame:
     df = pd.DataFrame([dict(record) for record in records])
     return df
 
-async def clear_gravity_data() -> None:
+async def clear_gravity_data(session: AsyncSession) -> None:
     """
     Clears all gravity data from the database.
+    Args:
+        session (AsyncSession): The database session.
     """
     query = gravity_data.delete()
-    await database.execute(query)
+    await session.execute(query)
+    await session.commit()
 
-async def update_gravity_data(df: pd.DataFrame) -> None:
+async def update_gravity_data(session: AsyncSession, df: pd.DataFrame) -> None:
     """
     Updates existing gravity data in the database based on the DataFrame.
     This function assumes the DataFrame contains an 'id' column for existing records.
     For calculated fields (bouguer, cluster, anomaly, distance_km), it updates them.
     If no 'id' column is present, it clears and re-inserts all data.
+    Args:
+        session (AsyncSession): The database session.
+        df (pd.DataFrame): The DataFrame containing gravity data to update.
     """
     if 'id' not in df.columns:
         # If no ID, clear and re-insert (less efficient but ensures data is consistent)
         print("Warning: 'id' column not found in DataFrame for update. Clearing and re-inserting gravity data.")
-        await clear_gravity_data()
+        await clear_gravity_data(session)
         records_to_insert = df.to_dict(orient="records")
         if records_to_insert:
             query = gravity_data.insert()
-            await database.execute_many(query, records_to_insert)
+            await session.execute(query, records_to_insert)
+            await session.commit()
     else:
         # Update existing records based on ID
         for index, row in df.iterrows():
@@ -90,12 +107,18 @@ async def update_gravity_data(df: pd.DataFrame) -> None:
 
             if update_values: # Only execute if there are values to update
                 query = gravity_data.update().where(gravity_data.c.id == record_id).values(**update_values)
-                await database.execute(query)
+                await session.execute(query)
+        await session.commit()
 
 # --- Earthquake Data Operations ---
-async def get_earthquakes(query: EarthquakeQuery) -> List[Dict[str, Any]]:
+async def get_earthquakes(session: AsyncSession, query: EarthquakeQuery) -> List[Dict[str, Any]]:
     """
     Fetches earthquake data from the database based on the provided query parameters.
+    Args:
+        session (AsyncSession): The database session.
+        query (EarthquakeQuery): The query parameters for filtering earthquakes.
+    Returns:
+        List[Dict[str, Any]]: A list of earthquake data.
     """
     sql_query = earthquakes.select().where(
         earthquakes.c.time >= query.start_date,
@@ -107,11 +130,12 @@ async def get_earthquakes(query: EarthquakeQuery) -> List[Dict[str, Any]]:
     if query.max_mag is not None:
         sql_query = sql_query.where(earthquakes.c.mag <= query.max_mag)
     if query.min_depth is not None:
-        sql_query = sql_query.where(earthquakes.c.depth <= query.min_depth) # Changed to min_depth for consistency
+        sql_query = sql_query.where(earthquakes.c.depth <= query.min_depth)
     if query.max_depth is not None:
-        sql_query = sql_query.where(earthquakes.c.depth <= query.max_depth) # Changed to max_depth for consistency
+        sql_query = sql_query.where(earthquakes.c.depth <= query.max_depth)
 
-    records = await database.fetch_all(sql_query)
+    result = await session.execute(sql_query)
+    records = result.fetchall()
 
     return [dict(record) for record in records]
 
@@ -123,6 +147,10 @@ async def get_all_questions_with_details(session: AsyncSession) -> List[Question
     Retrieves all questions from the database, along with their comments
     and aggregated like/dislike counts.
     Questions are ordered by creation date (newest first).
+    Args:
+        session (AsyncSession): The database session.
+    Returns:
+        List[QuestionResponse]: A list of questions with their details.
     """
     # 1. Fetch all questions
     q_stmt = select(
@@ -185,6 +213,12 @@ async def get_all_questions_with_details(session: AsyncSession) -> List[Question
 async def create_question_db(session: AsyncSession, text: str, user_id: int) -> QuestionResponse:
     """
     Creates a new question in the database.
+    Args:
+        session (AsyncSession): The database session.
+        text (str): The text content of the question.
+        user_id (int): The ID of the user asking the question.
+    Returns:
+        QuestionResponse: The created question's details.
     """
     new_question_id = str(uuid.uuid4()) # Generate UUID for question ID
     query = questions.insert().values(
@@ -214,6 +248,11 @@ async def create_question_db(session: AsyncSession, text: str, user_id: int) -> 
 async def get_question_by_id_db(session: AsyncSession, question_id: str):
     """
     Retrieves a single question by its ID.
+    Args:
+        session (AsyncSession): The database session.
+        question_id (str): The ID of the question.
+    Returns:
+        The question record or None if not found.
     """
     stmt = select(questions).where(questions.c.id == question_id)
     result = await session.execute(stmt)
@@ -223,6 +262,13 @@ async def get_question_by_id_with_details(session: AsyncSession, question_id: st
     """
     Retrieves a single question by its ID, along with its comments
     and aggregated like/dislike counts.
+    Args:
+        session (AsyncSession): The database session.
+        question_id (str): The ID of the question.
+    Returns:
+        QuestionResponse: The question with its full details.
+    Raises:
+        ValueError: If the question with the given ID is not found.
     """
     # 1. Fetch the question
     q_stmt = select(
@@ -273,6 +319,14 @@ async def get_question_by_id_with_details(session: AsyncSession, question_id: st
 async def create_comment_db(session: AsyncSession, question_id: str, text: str) -> CommentResponse:
     """
     Creates a new comment for a given question.
+    Args:
+        session (AsyncSession): The database session.
+        question_id (str): The ID of the question to comment on.
+        text (str): The text content of the comment.
+    Returns:
+        CommentResponse: The created comment's details.
+    Raises:
+        ValueError: If the newly created comment cannot be retrieved.
     """
     new_comment_id = str(uuid.uuid4()) # Generate UUID for comment ID
     query = comments.insert().values(
@@ -282,7 +336,7 @@ async def create_comment_db(session: AsyncSession, question_id: str, text: str) 
         created_at=datetime.now()
     )
     await session.execute(query)
-    # No commit here, handled by caller
+    # No commit here, handled by caller in route or service layer
     result = await session.execute(select(comments).where(comments.c.id == new_comment_id))
     created_comment = result.first()
     if created_comment:
@@ -292,6 +346,15 @@ async def create_comment_db(session: AsyncSession, question_id: str, text: str) 
 async def create_question_interaction_db(session: AsyncSession, question_id: str, user_id: int, interaction_type: LikeDislikeType) -> QuestionInteractionResponse:
     """
     Records a new like or dislike interaction for a question.
+    Args:
+        session (AsyncSession): The database session.
+        question_id (str): The ID of the question being interacted with.
+        user_id (int): The ID of the user performing the interaction.
+        interaction_type (LikeDislikeType): The type of interaction ('like' or 'dislike').
+    Returns:
+        QuestionInteractionResponse: The created interaction's details.
+    Raises:
+        ValueError: If the newly created interaction cannot be retrieved.
     """
     new_interaction_id = str(uuid.uuid4())
     query = question_likes.insert().values(
@@ -312,6 +375,12 @@ async def create_question_interaction_db(session: AsyncSession, question_id: str
 async def get_user_question_interaction_db(session: AsyncSession, user_id: int, question_id: str) -> Optional[QuestionInteractionResponse]:
     """
     Retrieves a user's existing like/dislike interaction for a specific question.
+    Args:
+        session (AsyncSession): The database session.
+        user_id (int): The ID of the user.
+        question_id (str): The ID of the question.
+    Returns:
+        Optional[QuestionInteractionResponse]: The interaction details or None if not found.
     """
     stmt = select(question_likes).where(
         question_likes.c.user_id == user_id,
@@ -326,11 +395,19 @@ async def get_user_question_interaction_db(session: AsyncSession, user_id: int, 
 async def update_question_interaction_db(session: AsyncSession, interaction_id: str, new_type: LikeDislikeType) -> QuestionInteractionResponse:
     """
     Updates an existing like/dislike interaction.
+    Args:
+        session (AsyncSession): The database session.
+        interaction_id (str): The ID of the interaction to update.
+        new_type (LikeDislikeType): The new type of interaction.
+    Returns:
+        QuestionInteractionResponse: The updated interaction details.
+    Raises:
+        ValueError: If the updated interaction cannot be retrieved.
     """
     current_time = datetime.now()
     stmt = question_likes.update().where(question_likes.c.id == interaction_id).values(
         type=new_type.value, # Use .value for enum
-        created_at=current_time
+        created_at=current_time # Update timestamp
     )
     await session.execute(stmt)
     # Commit handled by caller
@@ -346,6 +423,9 @@ async def update_question_interaction_db(session: AsyncSession, interaction_id: 
 async def delete_question_interaction_db(session: AsyncSession, interaction_id: str):
     """
     Deletes a like/dislike interaction.
+    Args:
+        session (AsyncSession): The database session.
+        interaction_id (str): The ID of the interaction to delete.
     """
     stmt = question_likes.delete().where(question_likes.c.id == interaction_id)
     await session.execute(stmt)
@@ -355,7 +435,14 @@ async def delete_question_interaction_db(session: AsyncSession, interaction_id: 
 # --- User & Existence Checks (Helper Functions) ---
 
 async def user_exists_db(session: AsyncSession, user_id: int) -> bool:
-    """Checks if a user with the given ID exists."""
+    """
+    Checks if a user with the given ID exists.
+    Args:
+        session (AsyncSession): The database session.
+        user_id (int): The ID of the user to check.
+    Returns:
+        bool: True if the user exists, False otherwise.
+    """
     stmt = select(users.c.id).where(users.c.id == user_id)
     result = await session.execute(stmt)
     return result.scalar_one_or_none() is not None
@@ -365,6 +452,11 @@ async def user_exists_db(session: AsyncSession, user_id: int) -> bool:
 async def create_researcher_db(session: AsyncSession, researcher_data: Dict[str, Any]) -> Dict[str, Any]:
     """
     Creates a new researcher entry in the database.
+    Args:
+        session (AsyncSession): The database session.
+        researcher_data (Dict[str, Any]): Dictionary containing researcher details.
+    Returns:
+        Dict[str, Any]: The created researcher's data.
     """
     new_id = str(uuid.uuid4())
     query = researchers.insert().values(
@@ -384,6 +476,10 @@ async def create_researcher_db(session: AsyncSession, researcher_data: Dict[str,
 async def get_all_researchers_db(session: AsyncSession) -> List[Dict[str, Any]]:
     """
     Retrieves all researcher entries from the database.
+    Args:
+        session (AsyncSession): The database session.
+    Returns:
+        List[Dict[str, Any]]: A list of all researcher data.
     """
     query = select(researchers).order_by(desc(researchers.c.created_at))
     result = await session.execute(query)
@@ -392,6 +488,11 @@ async def get_all_researchers_db(session: AsyncSession) -> List[Dict[str, Any]]:
 async def get_researcher_by_id_db(session: AsyncSession, researcher_id: str) -> Optional[Dict[str, Any]]:
     """
     Retrieves a single researcher entry by its ID.
+    Args:
+        session (AsyncSession): The database session.
+        researcher_id (str): The ID of the researcher.
+    Returns:
+        Optional[Dict[str, Any]]: The researcher's data or None if not found.
     """
     query = select(researchers).where(researchers.c.id == researcher_id)
     result = await session.execute(query)
@@ -400,6 +501,12 @@ async def get_researcher_by_id_db(session: AsyncSession, researcher_id: str) -> 
 async def update_researcher_db(session: AsyncSession, researcher_id: str, update_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """
     Updates an existing researcher entry in the database.
+    Args:
+        session (AsyncSession): The database session.
+        researcher_id (str): The ID of the researcher to update.
+        update_data (Dict[str, Any]): Dictionary of fields to update.
+    Returns:
+        Optional[Dict[str, Any]]: The updated researcher's data or None if update failed.
     """
     update_data["updated_at"] = datetime.now()
     query = researchers.update().where(researchers.c.id == researcher_id).values(**update_data)
@@ -410,6 +517,11 @@ async def update_researcher_db(session: AsyncSession, researcher_id: str, update
 async def delete_researcher_db(session: AsyncSession, researcher_id: str) -> bool:
     """
     Deletes a researcher entry from the database.
+    Args:
+        session (AsyncSession): The database session.
+        researcher_id (str): The ID of the researcher to delete.
+    Returns:
+        bool: True if a row was deleted, False otherwise.
     """
     query = researchers.delete().where(researchers.c.id == researcher_id)
     result = await session.execute(query)
