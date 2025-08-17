@@ -74,8 +74,6 @@ class EarthquakeQuery(BaseModel):
 
 # --- Enums ---
 
-# --- Enums ---
-
 class LikeDislikeType(str, Enum):
     """Enum for the type of interaction: 'like' or 'dislike'."""
     LIKE = "like"
@@ -129,11 +127,11 @@ class QuestionInteractionResponse(BaseModel):
     This is the model that was crucial for the backend fix.
     """
     id: str
-    user_id: str # Changed to str consistent with typical UUIDs for user IDs
+    user_id: int # Changed to int to match the database schema
     question_id: str
     type: str # Use str here as the 'removed' status is not part of the enum (or consider LikeDislikeType)
     created_at: datetime # Timezone-naive datetime
-    updated_at: datetime # Interactions often have an updated_at timestamp
+    # removed updated_at as it's not present in the database table
 
     # Pydantic v2 configuration
     model_config = ConfigDict(from_attributes=True)
