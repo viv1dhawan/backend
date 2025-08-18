@@ -1,4 +1,4 @@
-# app.py (Extended with Q&A Endpoints)
+# app.py (Extended with Q&A and Researcher Endpoints)
 from fastapi import APIRouter, HTTPException, Depends, Form, File, UploadFile, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from jose import JWTError, jwt
@@ -585,7 +585,7 @@ async def delete_question_interaction(
     # First, verify that the interaction exists and belongs to the current user
     interaction = await application_db.get_user_question_interaction_db(session, user_id, question_id)
     if not interaction or interaction.id != interaction_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUDN, detail="Interaction not found or you don't have permission to delete it.")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Interaction not found or you don't have permission to delete it.")
 
     try:
         await application_db.delete_question_interaction_db(session, interaction_id)
@@ -692,4 +692,3 @@ async def delete_researcher(
     except Exception as e:
         await session.rollback()
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to delete researcher: {e}")
-
