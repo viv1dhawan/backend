@@ -1,7 +1,7 @@
 import uuid
 import sqlalchemy
 from datetime import datetime
-# Import metadata from the local database module (now a sibling)
+# Import metadata from the local database module
 from database import metadata
 
 # Table definition for users
@@ -107,9 +107,10 @@ question_likes = sqlalchemy.Table(
 researchers = sqlalchemy.Table(
     "researchers",
     metadata,
-    sqlalchemy.Column("id", sqlalchemy.String(36), primary_key=True, default=lambda: str(uuid.uuid4())),
+    sqlalchemy.Column("id", sqlalchemy.Integer, primary_key=True, autoincrement=True),
     sqlalchemy.Column("title", sqlalchemy.String(255), nullable=False),
     sqlalchemy.Column("authors", sqlalchemy.String(500), nullable=False),
+    sqlalchemy.Column("profile", sqlalchemy.String(500), nullable=False),
     sqlalchemy.Column("publication_date", sqlalchemy.String(50), nullable=False), # Storing as string to match schema
     sqlalchemy.Column("url", sqlalchemy.String(1000), nullable=False),
     sqlalchemy.Column("created_at", sqlalchemy.DateTime, default=datetime.now, nullable=False),
