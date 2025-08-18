@@ -1,6 +1,6 @@
-# app.py (Extended with Q&A and Researcher Endpoints)
-from fastapi import APIRouter, HTTPException, Depends, Form, File, UploadFile, status
-from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+# app.py (Extended with Q&A and Researcher Endpoints, updated for JSON POST requests)
+from fastapi import APIRouter, HTTPException, Depends, File, UploadFile, status
+from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
 from datetime import datetime, timedelta, date # Import date for the Researcher model's publication_date
 from typing import List, Optional, Dict, Any
@@ -15,6 +15,7 @@ from scipy.interpolate import griddata
 from math import radians, cos, sin, asin, sqrt
 import json
 import os
+from pydantic import BaseModel # Import BaseModel for creating new request schemas
 
 # Import database operations
 import db_info.user_db as user_db
@@ -36,10 +37,17 @@ app_router = APIRouter()
 qna_router = APIRouter() # New router for Q&A features
 researcher_router = APIRouter() # New router for Researcher features
 
+# --- New Pydantic Model for JSON Login Request ---
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
 # --- Security Configuration ---
 SECRET_KEY = "IAMVIVEKDHAWAN_SUPER_SECRET_KEY"  # IMPORTANT: Use environment variables in production!
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
+
+# OAuth2PasswordBearer is used for extracting token from header, not for parsing form data
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/users/token")
 
 # In-memory token blacklist (Use Redis or database in production for persistence)
@@ -82,7 +90,7 @@ async def get_current_user(
 
 @users_router.post("/signup", response_model=UserOut, summary="Register a new user")
 async def signup(
-    user: UserCreate,
+    user: UserCreate, # UserCreate already accepts JSON
     session: AsyncSession = Depends(get_db_session) # Inject session
 ):
     """
@@ -98,15 +106,16 @@ async def signup(
 
 @users_router.post("/token", summary="Authenticate user and get access token")
 async def login(
-    form_data: OAuth2PasswordRequestForm = Depends(),
+    login_request: LoginRequest, # Changed from OAuth2PasswordRequestForm to custom LoginRequest Pydantic model
     session: AsyncSession = Depends(get_db_session) # Inject session
 ):
     """
     Authenticates a user with username (email) and password,
     and returns an access token upon successful login.
+    Accepts application/json body.
     """
-    current_user = await user_db.get_user_by_email(session, form_data.username) # Pass session
-    if not current_user or not user_db.verify_password(form_data.password, current_user["hashed_password"]):
+    current_user = await user_db.get_user_by_email(session, login_request.username) # Access username from Pydantic model
+    if not current_user or not user_db.verify_password(login_request.password, current_user["hashed_password"]): # Access password from Pydantic model
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Incorrect username or password")
 
     access_token = create_access_token(data={"sub": current_user["email"]})
@@ -114,7 +123,7 @@ async def login(
 
 @users_router.post("/password-reset-request", summary="Request a password reset token")
 async def password_reset_request(
-    request: PasswordResetRequest,
+    request: PasswordResetRequest, # Already accepts JSON
     session: AsyncSession = Depends(get_db_session) # Inject session
 ):
     """
@@ -131,7 +140,7 @@ async def password_reset_request(
 
 @users_router.post("/password-reset", summary="Reset user password with token")
 async def password_reset(
-    password_reset_data: PasswordReset,
+    password_reset_data: PasswordReset, # Already accepts JSON
     session: AsyncSession = Depends(get_db_session) # Inject session
 ):
     """
@@ -145,7 +154,7 @@ async def password_reset(
 
 @users_router.post("/request-email-verification/", summary="Request email verification token")
 async def request_email_verification(
-    request: EmailVerificationRequest,
+    request: EmailVerificationRequest, # Already accepts JSON
     session: AsyncSession = Depends(get_db_session) # Inject session
 ):
     """
@@ -165,7 +174,7 @@ async def request_email_verification(
 
 @users_router.post("/verify-email/", summary="Verify user email with token")
 async def verify_email_with_token(
-    verification: EmailVerification,
+    verification: EmailVerification, # Already accepts JSON
     session: AsyncSession = Depends(get_db_session) # Inject session
 ):
     """
@@ -185,7 +194,7 @@ async def get_user_me(current_user: dict = Depends(get_current_user)):
 
 @users_router.put("/me", response_model=UserOut, summary="Update current user's details")
 async def update_user_details(
-    user_update: UserUpdate,
+    user_update: UserUpdate, # Already accepts JSON
     current_user: dict = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session) # Inject session
 ):
@@ -252,12 +261,13 @@ def haversine(lat1, lon1, lat2, lon2):
 
 @app_router.post("/upload-data/", response_model=UploadResponse, summary="Upload Gravity Data CSV")
 async def upload_gravity_data(
-    file: UploadFile = File(...),
+    file: UploadFile = File(...), # Kept as File due to efficiency for file uploads
     session: AsyncSession = Depends(get_db_session) # Inject session
 ):
     """
     Uploads a CSV file containing gravity data.
     The CSV must have 'latitude', 'longitude', and 'gravity' columns.
+    This endpoint expects 'multipart/form-data' for file upload.
     """
     if not file.filename.endswith(".csv"):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid file format. Please upload a CSV file.")
@@ -473,7 +483,7 @@ async def generate_anomaly_map(df: pd.DataFrame = Depends(get_dataframe_dependen
 
 @qna_router.post("/questions/", response_model=QuestionResponse, status_code=status.HTTP_201_CREATED, summary="Create a new question")
 async def create_new_question(
-    question: QuestionCreate,
+    question: QuestionCreate, # Already accepts JSON
     session: AsyncSession = Depends(get_db_session),
     current_user: dict = Depends(get_current_user) # Requires authentication
 ):
@@ -508,7 +518,7 @@ async def get_all_questions(session: AsyncSession = Depends(get_db_session)):
 @qna_router.post("/questions/{question_id}/comments/", response_model=CommentResponse, status_code=status.HTTP_201_CREATED, summary="Add a comment to a question")
 async def add_comment_to_question(
     question_id: str,
-    comment: CommentCreate,
+    comment: CommentCreate, # Already accepts JSON
     session: AsyncSession = Depends(get_db_session),
     current_user: dict = Depends(get_current_user) # Requires authentication
 ):
@@ -531,7 +541,7 @@ async def add_comment_to_question(
 @qna_router.post("/questions/{question_id}/interact/", response_model=QuestionInteractionResponse, status_code=status.HTTP_201_CREATED, summary="Like or dislike a question")
 async def interact_with_question(
     question_id: str,
-    interaction_type: LikeDislikeType, # Pydantic Enum for 'like' or 'dislike'
+    interaction_type: LikeDislikeType, # Already accepts JSON (from path/query, but works with body too)
     session: AsyncSession = Depends(get_db_session),
     current_user: dict = Depends(get_current_user) # Requires authentication
 ):
@@ -599,7 +609,7 @@ async def delete_question_interaction(
 
 @researcher_router.post("/", response_model=Researcher, status_code=status.HTTP_201_CREATED, summary="Create a new researcher entry")
 async def create_researcher(
-    researcher: Researcher,
+    researcher: Researcher, # Already accepts JSON
     session: AsyncSession = Depends(get_db_session),
     current_user: dict = Depends(get_current_user) # Requires authentication
 ):
@@ -651,7 +661,7 @@ async def get_researcher_by_id(
 @researcher_router.put("/{researcher_id}", response_model=Researcher, summary="Update a researcher entry")
 async def update_researcher(
     researcher_id: str,
-    researcher_update: Researcher, # Use the full Researcher schema for updates
+    researcher_update: Researcher, # Already accepts JSON
     session: AsyncSession = Depends(get_db_session),
     current_user: dict = Depends(get_current_user) # Requires authentication
 ):
@@ -697,4 +707,3 @@ async def delete_researcher(
     except Exception as e:
         await session.rollback()
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to delete researcher: {e}")
-
