@@ -8,7 +8,9 @@ class Researcher(BaseModel):
     authors: str
     publication_date: str
     url: str
-
+    profile : str
+    created_at: datetime
+    updated_at: datetime
 
 # Pydantic model for a single raw gravity data point
 class GravityDataPoint(BaseModel):
@@ -155,3 +157,4 @@ class QuestionResponse(BaseModel):
     # Pydantic v1 equivalent:
     # class Config:
     #     orm_mode = True
+
