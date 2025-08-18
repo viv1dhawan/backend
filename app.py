@@ -2,7 +2,7 @@
 from fastapi import APIRouter, HTTPException, Depends, Form, File, UploadFile, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from jose import JWTError, jwt
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date # Import date for the Researcher model's publication_date
 from typing import List, Optional, Dict, Any
 import pandas as pd
 import numpy as np
@@ -22,7 +22,7 @@ import db_info.application_db as application_db
 
 # Import Pydantic schemas
 from Schema.user_schema import UserCreate, UserOut, PasswordReset, PasswordResetRequest, EmailVerificationRequest, EmailVerification, UserUpdate
-from Schema.application_schema import EarthquakeQuery, GravityDataPoint, ProcessedGravityData, UploadResponse, AnomalyDetectionResult, ClusteringResult, PlotlyGraph, ErrorResponse, Researcher
+from Schema.application_schema import EarthquakeQuery, GravityDataPoint, ProcessedGravityData, UploadResponse, AnomalyDetectionResult, ClusteringResult, PlotlyGraph, ErrorResponse, Researcher # Ensure Researcher is imported
 # Import Q&A related schemas
 from Schema.application_schema import QuestionCreate, QuestionResponse, CommentCreate, CommentResponse, LikeDislikeType, QuestionInteractionResponse
 
@@ -608,9 +608,11 @@ async def create_researcher(
     Creates a new researcher entry (e.g., for a publication).
     """
     try:
+        # Pass the model_dump() including all fields defined in Researcher schema
         new_researcher = await application_db.create_researcher_db(session, researcher.model_dump())
         if not new_researcher:
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to create researcher entry.")
+        # Ensure the returned dictionary is compatible with the Researcher Pydantic model
         return Researcher(**new_researcher)
     except Exception as e:
         await session.rollback()
@@ -625,11 +627,9 @@ async def get_all_researchers(
     Retrieves all researcher entries.
     """
     try:
-        # Assuming researchers_data from application_db.get_all_researchers_db
-        # might return SQLAlchemy Row objects which have an _asdict() method.
         researchers_data = await application_db.get_all_researchers_db(session)
-        # Convert each object to a dictionary if it has _asdict(), otherwise use it directly
-        return [Researcher(**(r._asdict() if hasattr(r, '_asdict') else r)) for r in researchers_data]
+        # Convert each SQLAlchemy Row object to a dictionary for Pydantic parsing
+        return [Researcher(**dict(r)) for r in researchers_data]
     except HTTPException as e:
         raise e
     except Exception as e:
@@ -663,7 +663,8 @@ async def update_researcher(
     if not existing_researcher:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Researcher not found.")
 
-    update_data = researcher_update.model_dump(exclude_unset=True) # Get only fields that are set
+    # Use model_dump(exclude_unset=True) to get only fields provided in the request body
+    update_data = researcher_update.model_dump(exclude_unset=True) 
     if not update_data:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No fields provided for update.")
 
