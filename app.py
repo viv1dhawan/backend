@@ -40,7 +40,6 @@ researcher_router = APIRouter() # New router for Researcher features
 SECRET_KEY = "IAMVIVEKDHAWAN_SUPER_SECRET_KEY"  # IMPORTANT: Use environment variables in production!
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
-
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/users/token")
 
 # In-memory token blacklist (Use Redis or database in production for persistence)
@@ -698,3 +697,4 @@ async def delete_researcher(
     except Exception as e:
         await session.rollback()
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to delete researcher: {e}")
+
