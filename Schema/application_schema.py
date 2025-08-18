@@ -13,7 +13,6 @@ class Researcher(BaseModel):
     created_at: Optional[datetime] = None # Make optional as it's set by backend
     updated_at: Optional[datetime] = None # Make optional as it's set by backend
 
-
 # Pydantic model for a single raw gravity data point
 class GravityDataPoint(BaseModel):
     latitude: float
@@ -159,3 +158,4 @@ class QuestionResponse(BaseModel):
     # Pydantic v1 equivalent:
     # class Config:
     #     orm_mode = True
+
