@@ -465,6 +465,7 @@ async def create_researcher_db(session: AsyncSession, researcher_data: Dict[str,
         authors=researcher_data["authors"],
         publication_date=researcher_data["publication_date"],
         url=researcher_data["url"],
+        profile=researcher_data["profile"], # Added to store the abstract/profile
         created_at=datetime.now(),
         updated_at=datetime.now()
     )
@@ -481,7 +482,17 @@ async def get_all_researchers_db(session: AsyncSession) -> List[Dict[str, Any]]:
     Returns:
         List[Dict[str, Any]]: A list of all researcher data.
     """
-    query = select(researchers).order_by(desc(researchers.c.created_at))
+    # Explicitly select all expected columns, including 'profile'
+    query = select(
+        researchers.c.id,
+        researchers.c.title,
+        researchers.c.authors,
+        researchers.c.publication_date,
+        researchers.c.url,
+        researchers.c.profile, # Ensure profile is selected
+        researchers.c.created_at,
+        researchers.c.updated_at
+    ).order_by(desc(researchers.c.created_at))
     result = await session.execute(query)
     return [dict(row) for row in result.fetchall()]
 
@@ -494,7 +505,17 @@ async def get_researcher_by_id_db(session: AsyncSession, researcher_id: str) -> 
     Returns:
         Optional[Dict[str, Any]]: The researcher's data or None if not found.
     """
-    query = select(researchers).where(researchers.c.id == researcher_id)
+    # Explicitly select all expected columns, including 'profile'
+    query = select(
+        researchers.c.id,
+        researchers.c.title,
+        researchers.c.authors,
+        researchers.c.publication_date,
+        researchers.c.url,
+        researchers.c.profile, # Ensure profile is selected
+        researchers.c.created_at,
+        researchers.c.updated_at
+    ).where(researchers.c.id == researcher_id)
     result = await session.execute(query)
     return dict(result.first()) if result.first() else None
 
