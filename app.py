@@ -625,8 +625,13 @@ async def get_all_researchers(
     Retrieves all researcher entries.
     """
     try:
+        # Assuming researchers_data from application_db.get_all_researchers_db
+        # might return SQLAlchemy Row objects which have an _asdict() method.
         researchers_data = await application_db.get_all_researchers_db(session)
-        return [Researcher(**r) for r in researchers_data]
+        # Convert each object to a dictionary if it has _asdict(), otherwise use it directly
+        return [Researcher(**(r._asdict() if hasattr(r, '_asdict') else r)) for r in researchers_data]
+    except HTTPException as e:
+        raise e
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to retrieve researchers: {e}")
 
