@@ -4,13 +4,16 @@ from enum import Enum
 from typing import List, Optional, Dict, Any
 
 class Researcher(BaseModel):
+    # Added user_id to the Researcher schema
+    id: Optional[int] = None # For retrieval, ID will be present
+    user_id: Optional[int] = None # For retrieval, user_id will be present
     title: str
     authors: str
     publication_date: str
     url: str
     profile : str
-    created_at: datetime
-    updated_at: datetime
+    created_at: Optional[datetime] = None # Optional for creation, auto-set by DB
+    updated_at: Optional[datetime] = None # Optional for creation, auto-set by DB
 
 
 # Pydantic model for a single raw gravity data point
@@ -110,16 +113,17 @@ class QuestionInteractionDeleteRequest(BaseModel):
 
 # For /researchers/get-by-id/ (new endpoint for getting researcher by ID via JSON)
 class ResearcherGetRequest(BaseModel):
-    researcher_id: str = Field(..., description="The ID of the researcher to retrieve.")
+    researcher_id: int = Field(..., description="The ID of the researcher to retrieve.") # Changed to int
 
 # For /researchers/update-researcher/ (new endpoint for updating researcher via JSON)
 class ResearcherUpdateRequest(BaseModel):
-    researcher_id: str = Field(..., description="The ID of the researcher to update.")
+    researcher_id: int = Field(..., description="The ID of the researcher to update.") # Changed to int
     title: Optional[str] = None
     authors: Optional[str] = None
     profile: Optional[str] = None
     publication_date: Optional[str] = None
     url: Optional[str] = None
+    user_id:Optional[int] = None
 
 # New Pydantic models for Together AI integration
 class TogetherAIRequest(BaseModel):
@@ -140,7 +144,7 @@ class QuestionCreate(BaseModel):
 
 # Existing
 class ResearcherDeleteRequest(BaseModel):
-    researcher_id: str = Field(..., description="The ID of the researcher to delete.")
+    researcher_id: int = Field(..., description="The ID of the researcher to delete.") # Changed to int
 
 
 # --- Response Models ---
@@ -179,3 +183,4 @@ class QuestionResponse(BaseModel):
     dislikes_count: int = 0
 
     model_config = ConfigDict(from_attributes=True)
+
