@@ -465,26 +465,23 @@ async def user_exists_db(conn: aiomysql.Connection, cursor: aiomysql.DictCursor,
 
 # --- Researcher CRUD Operations ---
 
-async def create_researcher_db(conn: aiomysql.Connection, cursor: aiomysql.DictCursor, researcher_data: Dict[str, Any]) -> Dict[str, Any]:
+async def create_researcher_db(conn: aiomysql.Connection, cursor: aiomysql.DictCursor, researcher_data: Dict[str, Any], user_id: int) -> Dict[str, Any]:
     """
-    Creates a new researcher entry in the database.
+    Creates a new researcher entry in the database, associated with a user.
     Args:
         conn: The aiomysql connection.
         cursor: The aiomysql dictionary cursor.
         researcher_data (Dict[str, Any]): Dictionary containing researcher details.
+        user_id (int): The ID of the user creating this researcher entry.
     Returns:
         Dict[str, Any]: The created researcher's data.
     """
-    # Assuming 'id' for researchers is AUTO_INCREMENT, so no need to generate UUID for it if the table schema is INT AUTO_INCREMENT
-    # If it was string UUID in the old schema, adjust this to generate UUID or use AUTO_INCREMENT for id.
-    # The provided models.py for 'researchers' had 'id' as 'sqlalchemy.Integer, primary_key=True, autoincrement=True)'
-    # so we will rely on auto-increment.
-
     query = """
-    INSERT INTO researchers (title, authors, profile, publication_date, url, created_at, updated_at)
-    VALUES (%s, %s, %s, %s, %s, %s, %s)
+    INSERT INTO researchers (user_id, title, authors, profile, publication_date, url, created_at, updated_at)
+    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
     """
     params = (
+        user_id, # Added user_id here
         researcher_data["title"],
         researcher_data["authors"],
         researcher_data["profile"],
@@ -514,35 +511,52 @@ async def get_all_researchers_db(conn: aiomysql.Connection, cursor: aiomysql.Dic
     Returns:
         List[Dict[str, Any]]: A list of all researcher data.
     """
-    query = "SELECT id, title, authors, profile, publication_date, url, created_at, updated_at FROM researchers ORDER BY created_at DESC"
+    # Now selecting user_id as well
+    query = "SELECT id, user_id, title, authors, profile, publication_date, url, created_at, updated_at FROM researchers ORDER BY created_at DESC"
     await cursor.execute(query)
     return await cursor.fetchall()
 
-async def get_researcher_by_id_db(conn: aiomysql.Connection, cursor: aiomysql.DictCursor, researcher_id: str) -> Optional[Dict[str, Any]]:
+async def get_researcher_by_id_db(conn: aiomysql.Connection, cursor: aiomysql.DictCursor, researcher_id: int) -> Optional[Dict[str, Any]]:
     """
     Retrieves a single researcher entry by its ID.
     Args:
         conn: The aiomysql connection.
         cursor: The aiomysql dictionary cursor.
-        researcher_id (str): The ID of the researcher.
+        researcher_id (int): The ID of the researcher.
     Returns:
         Optional[Dict[str, Any]]: The researcher's data or None if not found.
     """
-    # Note: If researcher_id is INT in DB, ensure it's passed as INT from FastAPI
-    query = "SELECT id, title, authors, profile, publication_date, url, created_at, updated_at FROM researchers WHERE id = %s"
+    query = "SELECT id, user_id, title, authors, profile, publication_date, url, created_at, updated_at FROM researchers WHERE id = %s"
     await cursor.execute(query, (researcher_id,))
     return await cursor.fetchone()
 
-async def update_researcher_db(conn: aiomysql.Connection, cursor: aiomysql.DictCursor, researcher_id: str, update_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+async def get_researcher_by_id_and_user_id_db(conn: aiomysql.Connection, cursor: aiomysql.DictCursor, researcher_id: int, user_id: int) -> Optional[Dict[str, Any]]:
     """
-    Updates an existing researcher entry in the database.
+    Retrieves a single researcher entry by its ID and ensures it belongs to the given user.
     Args:
         conn: The aiomysql connection.
         cursor: The aiomysql dictionary cursor.
-        researcher_id (str): The ID of the researcher to update.
+        researcher_id (int): The ID of the researcher.
+        user_id (int): The ID of the user who is supposed to own this researcher entry.
+    Returns:
+        Optional[Dict[str, Any]]: The researcher's data or None if not found or not owned by the user.
+    """
+    query = "SELECT id, user_id, title, authors, profile, publication_date, url, created_at, updated_at FROM researchers WHERE id = %s AND user_id = %s"
+    await cursor.execute(query, (researcher_id, user_id))
+    return await cursor.fetchone()
+
+
+async def update_researcher_db(conn: aiomysql.Connection, cursor: aiomysql.DictCursor, researcher_id: int, user_id: int, update_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """
+    Updates an existing researcher entry in the database, ensuring ownership.
+    Args:
+        conn: The aiomysql connection.
+        cursor: The aiomysql dictionary cursor.
+        researcher_id (int): The ID of the researcher to update.
+        user_id (int): The ID of the user attempting the update (for ownership check).
         update_data (Dict[str, Any]): Dictionary of fields to update.
     Returns:
-        Optional[Dict[str, Any]]: The updated researcher's data or None if update failed.
+        Optional[Dict[str, Any]]: The updated researcher's data or None if update failed or not owned.
     """
     update_data["updated_at"] = datetime.now()
     
@@ -553,26 +567,31 @@ async def update_researcher_db(conn: aiomysql.Connection, cursor: aiomysql.DictC
         params.append(value)
     
     if not set_clauses:
-        return await get_researcher_by_id_db(conn, cursor, researcher_id) # Nothing to update
+        # If no fields to update, just return the current state if owned
+        return await get_researcher_by_id_and_user_id_db(conn, cursor, researcher_id, user_id) 
     
     params.append(researcher_id) # Add researcher_id for the WHERE clause
+    params.append(user_id) # Add user_id for the WHERE clause to enforce ownership
 
-    query = f"UPDATE researchers SET {', '.join(set_clauses)} WHERE id = %s"
+    query = f"UPDATE researchers SET {', '.join(set_clauses)} WHERE id = %s AND user_id = %s"
     await cursor.execute(query, params)
     await conn.commit()
-    return await get_researcher_by_id_db(conn, cursor, researcher_id)
+    # After update, retrieve the updated record to ensure it was indeed updated (and still exists/owned)
+    return await get_researcher_by_id_and_user_id_db(conn, cursor, researcher_id, user_id)
 
-async def delete_researcher_db(conn: aiomysql.Connection, cursor: aiomysql.DictCursor, researcher_id: str) -> bool:
+async def delete_researcher_db(conn: aiomysql.Connection, cursor: aiomysql.DictCursor, researcher_id: int, user_id: int) -> bool:
     """
-    Deletes a researcher entry from the database.
+    Deletes a researcher entry from the database, ensuring ownership.
     Args:
         conn: The aiomysql connection.
         cursor: The aiomysql dictionary cursor.
-        researcher_id (str): The ID of the researcher to delete.
+        researcher_id (int): The ID of the researcher to delete.
+        user_id (int): The ID of the user attempting the delete (for ownership check).
     Returns:
         bool: True if a row was deleted, False otherwise.
     """
-    query = "DELETE FROM researchers WHERE id = %s"
-    await cursor.execute(query, (researcher_id,))
+    query = "DELETE FROM researchers WHERE id = %s AND user_id = %s"
+    await cursor.execute(query, (researcher_id, user_id))
     await conn.commit()
     return cursor.rowcount > 0 # Return True if a row was deleted
+
