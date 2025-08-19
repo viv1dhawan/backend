@@ -159,7 +159,7 @@ async def password_reset(
     conn, cursor = db_tuple
     email = await user_db.verify_password_reset_token(conn, cursor, password_reset_data.token)
     if not email:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired token")
+        raise HTTPException(status_code=status.HTTP_400_BAD_BAD_REQUEST, detail="Invalid or expired token")
     await user_db.update_password(conn, cursor, email, password_reset_data.new_password)
     return {"message": "Password updated successfully"}
 
@@ -645,18 +645,19 @@ async def delete_question_interaction(
 
 # --- Researcher Endpoints (researcher_router) ---
 
-@researcher_router.post("/add_researcher", response_model=Researcher, status_code=status.HTTP_201_CREATED, summary="Create a new researcher entry")
+@researcher_router.post("/add_researcher", response_model=Researcher, status_code=status.HTTP_201_CREATED, summary="Create a new researcher entry (owned by current user)")
 async def create_researcher(
     researcher: Researcher,
     db_tuple: Tuple[aiomysql.Connection, aiomysql.DictCursor] = Depends(get_db_connection),
     current_user: dict = Depends(get_current_user)
 ):
     """
-    Creates a new researcher entry (e.g., for a publication).
+    Creates a new researcher entry (e.g., for a publication), associated with the current user.
     """
     conn, cursor = db_tuple
     try:
-        new_researcher = await application_db.create_researcher_db(conn, cursor, researcher.model_dump())
+        # Pass the current user's ID when creating a new researcher entry
+        new_researcher = await application_db.create_researcher_db(conn, cursor, researcher.model_dump(), current_user["id"])
         if not new_researcher:
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to create researcher entry.")
         return Researcher(**new_researcher)
@@ -664,13 +665,12 @@ async def create_researcher(
         await conn.rollback()
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to create researcher: {e}")
 
-@researcher_router.get("/", response_model=List[Researcher], summary="Get all researcher entries")
+@researcher_router.get("/", response_model=List[Researcher], summary="Get all researcher entries (publicly accessible)")
 async def get_all_researchers(
-    db_tuple: Tuple[aiomysql.Connection, aiomysql.DictCursor] = Depends(get_db_connection),
-    current_user: dict = Depends(get_current_user)
+    db_tuple: Tuple[aiomysql.Connection, aiomysql.DictCursor] = Depends(get_db_connection)
 ):
     """
-    Retrieves all researcher entries.
+    Retrieves all researcher entries from the database, accessible publicly without authentication.
     """
     conn, cursor = db_tuple
     try:
@@ -686,11 +686,11 @@ async def get_all_researchers(
 async def get_researcher_by_id(
     request: ResearcherGetRequest, # Expects JSON body with researcher_id
     db_tuple: Tuple[aiomysql.Connection, aiomysql.DictCursor] = Depends(get_db_connection),
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user) # Still requires authentication to view
 ):
     """
     Retrieves a single researcher entry by its ID, provided in the request body as JSON.
-    Expects JSON body: {"researcher_id": "123"}
+    Expects JSON body: {"researcher_id": 123}
     """
     conn, cursor = db_tuple
     researcher_id = request.researcher_id
@@ -700,18 +700,19 @@ async def get_researcher_by_id(
     return Researcher(**researcher)
 
 # Changed from PUT with path parameter and body to POST with JSON body containing ID
-@researcher_router.post("/update-researcher/", response_model=Researcher, summary="Update a researcher entry (via JSON body)")
+@researcher_router.post("/update-researcher/", response_model=Researcher, summary="Update an owned researcher entry (via JSON body)")
 async def update_researcher(
     request: ResearcherUpdateRequest, # Expects JSON body with researcher_id and update fields
     db_tuple: Tuple[aiomysql.Connection, aiomysql.DictCursor] = Depends(get_db_connection),
     current_user: dict = Depends(get_current_user)
 ):
     """
-    Updates an existing researcher entry.
+    Updates an existing researcher entry, only if it is owned by the current user.
     Expects JSON body with `researcher_id` and fields to update, e.g.:
-    {"researcher_id": "123", "title": "New Title", "authors": "Updated Authors"}
+    {"researcher_id": 123, "title": "New Title", "authors": "Updated Authors"}
     """
     conn, cursor = db_tuple
+    user_id = current_user["id"]
     researcher_id = request.researcher_id
     
     # Extract update_data from the request model, excluding researcher_id and unset fields
@@ -721,12 +722,13 @@ async def update_researcher(
     if not update_data:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No fields provided for update.")
 
-    existing_researcher = await application_db.get_researcher_by_id_db(conn, cursor, researcher_id)
+    # Check ownership before attempting update
+    existing_researcher = await application_db.get_researcher_by_id_and_user_id_db(conn, cursor, researcher_id, user_id)
     if not existing_researcher:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Researcher not found.")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to update this researcher entry or entry not found.")
 
     try:
-        updated_researcher = await application_db.update_researcher_db(conn, cursor, researcher_id, update_data)
+        updated_researcher = await application_db.update_researcher_db(conn, cursor, researcher_id, user_id, update_data)
         if not updated_researcher:
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to update researcher entry.")
         return Researcher(**updated_researcher)
@@ -735,25 +737,28 @@ async def update_researcher(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to update researcher: {e}")
 
 # This endpoint was already updated in the previous turn
-@researcher_router.delete("/delete-researcher/", status_code=status.HTTP_204_NO_CONTENT, summary="Delete a researcher entry by ID (via JSON body)")
+@researcher_router.delete("/delete-researcher/", status_code=status.HTTP_204_NO_CONTENT, summary="Delete an owned researcher entry by ID (via JSON body)")
 async def delete_researcher(
     request: ResearcherDeleteRequest, # Expects a JSON body with researcher_id
     db_tuple: Tuple[aiomysql.Connection, aiomysql.DictCursor] = Depends(get_db_connection),
     current_user: dict = Depends(get_current_user) # Requires authentication
 ):
     """
-    Deletes a researcher entry by its ID, provided in the request body as JSON.
-    Example JSON Body: {"researcher_id": "123"}
+    Deletes a researcher entry by its ID, provided in the request body as JSON,
+    only if it is owned by the current user.
+    Example JSON Body: {"researcher_id": 123}
     """
     conn, cursor = db_tuple
+    user_id = current_user["id"]
     researcher_id_to_delete = request.researcher_id # Extract ID from the JSON body
 
-    existing_researcher = await application_db.get_researcher_by_id_db(conn, cursor, researcher_id_to_delete)
+    # Check ownership before attempting delete
+    existing_researcher = await application_db.get_researcher_by_id_and_user_id_db(conn, cursor, researcher_id_to_delete, user_id)
     if not existing_researcher:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Researcher not found.")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to delete this researcher entry or entry not found.")
 
     try:
-        deleted = await application_db.delete_researcher_db(conn, cursor, researcher_id_to_delete)
+        deleted = await application_db.delete_researcher_db(conn, cursor, researcher_id_to_delete, user_id)
         if not deleted:
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to delete researcher entry.")
         return {"message": "Researcher deleted successfully"}
