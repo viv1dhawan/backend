@@ -1,3 +1,4 @@
+import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from database import create_tables
@@ -28,11 +29,17 @@ app.include_router(researcher_router, prefix="/researchers", tags=["Researchers"
 def read_root():
     return {"message": "Welcome to the Geophysical Data API"}
 
-
-# Run with uvicorn if executed directly
 if __name__ == "__main__":
     import uvicorn
-    # This calls the synchronous function to create tables on startup
-    # For a real application, you'd want to handle this more robustly
-    create_tables() 
-    uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
+
+    # Railway provides the PORT environment variable
+    port = int(os.environ.get("PORT", 8000))
+
+    # Create tables on startup (will not block if DB connection fails)
+    try:
+        create_tables()
+    except Exception as e:
+        print(f"Warning: Could not create tables on startup: {e}")
+
+    # Run FastAPI app
+    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=True)
