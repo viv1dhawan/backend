@@ -1,119 +1,102 @@
-import uuid
-import sqlalchemy
-from datetime import datetime
-# Import metadata from the local database module
-from database import metadata
+# models.py - MySQL table schemas
 
-# Table definition for users
-users = sqlalchemy.Table(
-    "users",
-    metadata,
-    sqlalchemy.Column("id", sqlalchemy.Integer, primary_key=True, autoincrement=True),
-    sqlalchemy.Column("email", sqlalchemy.String(255), unique=True, nullable=False),
-    sqlalchemy.Column("hashed_password", sqlalchemy.String(255), nullable=False),
-    sqlalchemy.Column("first_name", sqlalchemy.String(255)),
-    sqlalchemy.Column("last_name", sqlalchemy.String(255)),
-    sqlalchemy.Column("is_verified", sqlalchemy.Boolean, default=False, nullable=False),
-    sqlalchemy.Column("created_at", sqlalchemy.DateTime, default=datetime.utcnow, nullable=False),
-    sqlalchemy.Column("updated_at", sqlalchemy.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False),
-)
+# Users table
+create_users_table = """
+CREATE TABLE IF NOT EXISTS users (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    email VARCHAR(255) NOT NULL UNIQUE,
+    hashed_password VARCHAR(255) NOT NULL,
+    first_name VARCHAR(255),
+    last_name VARCHAR(255),
+    is_verified BOOLEAN DEFAULT 0 NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+);
+"""
 
-# Table definition for password reset tokens
-password_reset_tokens = sqlalchemy.Table(
-    "password_reset_tokens",
-    metadata,
-    sqlalchemy.Column("id", sqlalchemy.Integer, primary_key=True, autoincrement=True),
-    sqlalchemy.Column("email", sqlalchemy.String(255), nullable=False),
-    sqlalchemy.Column("token", sqlalchemy.String(255), unique=True, nullable=False),
-    sqlalchemy.Column("created_at", sqlalchemy.DateTime, default=datetime.utcnow, nullable=False),
-    sqlalchemy.Column("expires_at", sqlalchemy.DateTime, nullable=False),
-)
+# Password reset tokens
+create_password_reset_tokens_table = """
+CREATE TABLE IF NOT EXISTS password_reset_tokens (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    email VARCHAR(255) NOT NULL,
+    token VARCHAR(255) NOT NULL UNIQUE,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    expires_at DATETIME NOT NULL
+);
+"""
 
-# Table definition for email verification tokens
-email_verification_tokens = sqlalchemy.Table(
-    "email_verification_tokens",
-    metadata,
-    sqlalchemy.Column("id", sqlalchemy.Integer, primary_key=True, autoincrement=True),
-    sqlalchemy.Column("email", sqlalchemy.String(255), nullable=False),
-    sqlalchemy.Column("token", sqlalchemy.String(255), unique=True, nullable=False),
-    sqlalchemy.Column("created_at", sqlalchemy.DateTime, default=datetime.utcnow, nullable=False),
-    sqlalchemy.Column("expires_at", sqlalchemy.DateTime, nullable=False),
-)
+# Email verification tokens
+create_email_verification_tokens_table = """
+CREATE TABLE IF NOT EXISTS email_verification_tokens (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    email VARCHAR(255) NOT NULL,
+    token VARCHAR(255) NOT NULL UNIQUE,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    expires_at DATETIME NOT NULL
+);
+"""
 
-# Table definition for gravity_data
-gravity_data = sqlalchemy.Table(
-    "gravity_data",
-    metadata,
-    sqlalchemy.Column("id", sqlalchemy.Integer, primary_key=True, autoincrement=True),
-    sqlalchemy.Column("latitude", sqlalchemy.Float, nullable=False),
-    sqlalchemy.Column("longitude", sqlalchemy.Float, nullable=False),
-    sqlalchemy.Column("elevation", sqlalchemy.Float, nullable=False),
-    sqlalchemy.Column("gravity", sqlalchemy.Float, nullable=False),
-    sqlalchemy.Column("bouguer", sqlalchemy.Float, nullable=True),  # Calculated Bouguer anomaly
-    sqlalchemy.Column("cluster", sqlalchemy.Integer, nullable=True),  # K-Means cluster assignment
-    sqlalchemy.Column("anomaly", sqlalchemy.Integer, nullable=True),  # Isolation Forest anomaly (-1 or 1)
-    sqlalchemy.Column("distance_km", sqlalchemy.Float, nullable=True), # Distance from a reference point
-    sqlalchemy.Column("created_at", sqlalchemy.DateTime, default=datetime.now),
-)
+# Questions
+create_questions_table = """
+CREATE TABLE IF NOT EXISTS questions (
+    id CHAR(36) PRIMARY KEY,
+    user_id INT,
+    text TEXT NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+"""
 
-# Table definition for earthquakes
-earthquakes = sqlalchemy.Table(
-    "earthquakes",
-    metadata,
-    sqlalchemy.Column("id", sqlalchemy.String(50), primary_key=True),
-    sqlalchemy.Column("time", sqlalchemy.DateTime, nullable=False),
-    sqlalchemy.Column("latitude", sqlalchemy.Float, nullable=False),
-    sqlalchemy.Column("longitude", sqlalchemy.Float, nullable=False),
-    sqlalchemy.Column("depth", sqlalchemy.Float, nullable=False),
-    sqlalchemy.Column("mag", sqlalchemy.Float, nullable=False),
-    sqlalchemy.Column("place", sqlalchemy.String(255)),
-    sqlalchemy.Column("updated_at", sqlalchemy.DateTime, default=datetime.now, onupdate=datetime.now),
-)
+# Comments
+create_comments_table = """
+CREATE TABLE IF NOT EXISTS comments (
+    id CHAR(36) PRIMARY KEY,
+    user_id INT,
+    question_id CHAR(36),
+    text TEXT NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (question_id) REFERENCES questions(id) ON DELETE CASCADE
+);
+"""
 
-# Table definition for questions in Q&A forum
-questions = sqlalchemy.Table(
-    "questions",
-    metadata,
-    sqlalchemy.Column("id", sqlalchemy.String(36), primary_key=True, default=lambda: str(uuid.uuid4())),
-    sqlalchemy.Column("user_id", sqlalchemy.Integer, sqlalchemy.ForeignKey("users.id"), nullable=False), # Link to user who asked
-    sqlalchemy.Column("text", sqlalchemy.String(1000), nullable=False),
-    sqlalchemy.Column("created_at", sqlalchemy.DateTime, default=datetime.now, nullable=False),
-)
+# Question interactions
+create_question_interactions_table = """
+CREATE TABLE IF NOT EXISTS question_interactions (
+    id CHAR(36) PRIMARY KEY,
+    user_id INT,
+    question_id CHAR(36),
+    type VARCHAR(10) NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (user_id, question_id),
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (question_id) REFERENCES questions(id) ON DELETE CASCADE
+);
+"""
 
-# Table definition for comments
-comments = sqlalchemy.Table(
-    "comments",
-    metadata,
-    sqlalchemy.Column("id", sqlalchemy.String(36), primary_key=True, default=lambda: str(uuid.uuid4())),
-    sqlalchemy.Column("text", sqlalchemy.String(500), nullable=False),
-    sqlalchemy.Column("created_at", sqlalchemy.DateTime, default=datetime.now, nullable=False),
-    sqlalchemy.Column("question_id", sqlalchemy.String(36), sqlalchemy.ForeignKey("questions.id"), nullable=False),
-)
+# Researchers
+create_researchers_table = """
+CREATE TABLE IF NOT EXISTS researchers (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    title VARCHAR(255) NOT NULL,
+    authors VARCHAR(500) NOT NULL,
+    user_id INT,
+    profile VARCHAR(500) NOT NULL,
+    publication_date VARCHAR(50) NOT NULL,
+    url VARCHAR(1000) NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+"""
 
-# Table definition for question_likes
-question_likes = sqlalchemy.Table(
-    "question_likes",
-    metadata,
-    sqlalchemy.Column("id", sqlalchemy.String(36), primary_key=True, default=lambda: str(uuid.uuid4())),
-    sqlalchemy.Column("user_id", sqlalchemy.Integer, sqlalchemy.ForeignKey("users.id"), nullable=False),
-    sqlalchemy.Column("question_id", sqlalchemy.String(36), sqlalchemy.ForeignKey("questions.id"), nullable=False),
-    sqlalchemy.Column("type", sqlalchemy.String(10), nullable=False), # 'like' or 'dislike'
-    sqlalchemy.Column("created_at", sqlalchemy.DateTime, default=datetime.now, nullable=False),
-    # Unique constraint to ensure a user can only like/dislike a question once
-    sqlalchemy.UniqueConstraint("user_id", "question_id", name="uq_user_question_interaction")
-)
-
-# New table definition for researchers
-researchers = sqlalchemy.Table(
-    "researchers",
-    metadata,
-    sqlalchemy.Column("id", sqlalchemy.Integer, primary_key=True, autoincrement=True),
-    sqlalchemy.Column("title", sqlalchemy.String(255), nullable=False),
-    sqlalchemy.Column("authors", sqlalchemy.String(500), nullable=False),
-    sqlalchemy.Column("user_id", sqlalchemy.Integer, sqlalchemy.ForeignKey("users.id"), nullable=True),
-    sqlalchemy.Column("profile", sqlalchemy.String(500), nullable=False),
-    sqlalchemy.Column("publication_date", sqlalchemy.String(50), nullable=False), # Storing as string to match schema
-    sqlalchemy.Column("url", sqlalchemy.String(1000), nullable=False),
-    sqlalchemy.Column("created_at", sqlalchemy.DateTime, default=datetime.now, nullable=False),
-    sqlalchemy.Column("updated_at", sqlalchemy.DateTime, default=datetime.now, onupdate=datetime.now, nullable=False),
-)
+# List of tables to create in order
+TABLES = [
+    create_users_table,
+    create_password_reset_tokens_table,
+    create_email_verification_tokens_table,
+    create_questions_table,
+    create_comments_table,
+    create_question_interactions_table,
+    create_researchers_table,
+]

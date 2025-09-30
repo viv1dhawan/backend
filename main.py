@@ -1,62 +1,38 @@
-from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-# Import create_db_pool, close_db_pool, and create_tables from database.py
-from database import create_db_pool, close_db_pool, create_tables
-# Import the APIRouters from app.py, which is a sibling
+from database import create_tables
 from app import users_router, app_router, qna_router, researcher_router
-import uvicorn  # Import uvicorn
-
-# Define the lifespan context manager
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """
-    Handles startup and shutdown events for the FastAPI application.
-    Initializes the database connection pool and creates tables on startup,
-    and closes the connection pool on shutdown.
-    """
-    # Startup events
-    await create_db_pool() # Initialize the connection pool
-    await create_tables() # This will ensure tables are created using a managed connection
-    print("Database connected and tables checked/created.")
-
-    # Print the Swagger UI URL on startup
-    swagger_ui_url = "http://127.0.0.1:8000/docs"  # Assuming default host and port
-    print(f"Swagger UI available at: {swagger_ui_url}")
-    
-    yield
-    # Shutdown events
-    await close_db_pool() # Close the connection pool
-    print("Database disconnected.")
 
 app = FastAPI(
     title="Geophysical Data API",
     description="API for managing user accounts, gravity data processing, and earthquake data retrieval.",
     version="1.0.0",
-    lifespan=lifespan  # Assign the lifespan context manager here
 )
 
-# Allow CORS for all origins (adjust as necessary for production)
+# Allow CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Adjust origins as needed, e.g., ["http://localhost:3000"]
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Include routers for different functionalities
+# Routers
 app.include_router(users_router, prefix="/users", tags=["Users"])
 app.include_router(app_router, prefix="/app_router", tags=["Geophysical Data"])
-app.include_router(qna_router, prefix="/qna_router", tags=["Q&A Forum "])
+app.include_router(qna_router, prefix="/qna_router", tags=["Q&A Forum"])
 app.include_router(researcher_router, prefix="/researchers", tags=["Researchers"])
 
-@app.get("/", summary="Root endpoint")
-async def root():
-    """
-    Root endpoint for the API, returns a welcome message.
-    """
-    return {"message": "Welcome to the Geophysical Data API!"}
+@app.get("/", tags=["Root"])
+def read_root():
+    return {"message": "Welcome to the Geophysical Data API"}
 
+
+# Run with uvicorn if executed directly
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    import uvicorn
+    # This calls the synchronous function to create tables on startup
+    # For a real application, you'd want to handle this more robustly
+    create_tables() 
+    uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
