@@ -1,14 +1,15 @@
-# db_info/user_db.py
+# db_info/user_db.py - Updated for pyodbc
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
 import bcrypt
 import secrets
-import aiomysql # Import aiomysql
+import pyodbc
 
-# Note: models.py is no longer used for table definitions with raw SQL
-# from models import users, password_reset_tokens, email_verification_tokens
-# No longer import schema from Schema/user_schema as we are directly returning dicts
-# from Schema.user_schema import UserCreate
+# Helper function to convert pyodbc.Row to a dictionary
+def row_to_dict(row):
+    if not row:
+        return None
+    return {column[0]: row[i] for i, column in enumerate(row.cursor_description)}
 
 # --- Password Hashing and Verification ---
 def hash_password(password: str) -> str:
@@ -21,237 +22,195 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
     return bcrypt.checkpw(plain_password.encode('utf-8'), hashed_password.encode('utf-8'))
 
 # --- User CRUD Operations ---
-async def create_user(conn: aiomysql.Connection, cursor: aiomysql.DictCursor, user_data: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Creates a new user in the database.
-    Args:
-        conn: The aiomysql connection.
-        cursor: The aiomysql dictionary cursor.
-        user_data (dict): Dictionary containing user details (first_name, last_name, email, password).
-    Returns:
-        dict: The created user's data (excluding hashed password).
-    """
-    hashed_password = hash_password(user_data["password"])
-    query = """
-    INSERT INTO users (first_name, last_name, email, hashed_password, is_verified, created_at, updated_at)
-    VALUES (%s, %s, %s, %s, %s, %s, %s)
-    """
-    params = (
-        user_data["first_name"],
-        user_data["last_name"],
-        user_data["email"],
-        hashed_password,
-        False,
-        datetime.utcnow(),
-        datetime.utcnow()
-    )
-    await cursor.execute(query, params)
-    await conn.commit()
+def create_user(conn, user_data: dict):
+    cursor = conn.cursor()
+    try:
+        hashed_password = hash_password(user_data["password"])
+        query = """
+        INSERT INTO users (first_name, last_name, email, hashed_password)
+        OUTPUT INSERTED.id, INSERTED.first_name, INSERTED.last_name, INSERTED.email, INSERTED.is_verified, INSERTED.created_at, INSERTED.updated_at
+        VALUES (?, ?, ?, ?);
+        """
+        cursor.execute(query, (user_data["first_name"], user_data["last_name"], user_data["email"], hashed_password))
+        
+        # Fetch the newly created user record
+        new_user_row = cursor.fetchone()
+        conn.commit()
+        return row_to_dict(new_user_row)
+    finally:
+        cursor.close()
 
-    # Get the last inserted ID
-    await cursor.execute("SELECT LAST_INSERT_ID() as id")
-    result = await cursor.fetchone()
-    last_record_id = result['id'] if result else None
+def get_user_by_email(conn, email: str):
+    """Retrieves a single user by their email address."""
+    cursor = conn.cursor()
+    try:
+        query = "SELECT id, first_name, last_name, email, hashed_password, is_verified FROM users WHERE email = ?;"
+        cursor.execute(query, (email,))
+        user_row = cursor.fetchone()
+        return row_to_dict(user_row)
+    finally:
+        cursor.close()
 
-    if not last_record_id:
-        raise Exception("Failed to retrieve new user ID after insertion.")
+def get_user_by_id(conn, user_id: int):
+    """Retrieves a single user by their ID."""
+    cursor = conn.cursor()
+    try:
+        query = "SELECT id, first_name, last_name, email, is_verified FROM users WHERE id = ?;"
+        cursor.execute(query, (user_id,))
+        user_row = cursor.fetchone()
+        return row_to_dict(user_row)
+    finally:
+        cursor.close()
 
-    # Fetch the newly created user to return it
-    return await get_user_by_id(conn, cursor, last_record_id)
-
-
-async def get_user_by_email(conn: aiomysql.Connection, cursor: aiomysql.DictCursor, email: str) -> Optional[Dict[str, Any]]:
-    """
-    Retrieves a user by their email address.
-    Args:
-        conn: The aiomysql connection.
-        cursor: The aiomysql dictionary cursor.
-        email (str): The email address of the user.
-    Returns:
-        Optional[Dict[str, Any]]: The user's data or None if not found.
-    """
-    query = "SELECT id, email, hashed_password, first_name, last_name, is_verified, created_at, updated_at FROM users WHERE email = %s"
-    await cursor.execute(query, (email,))
-    user_record = await cursor.fetchone()
-    return user_record
-
-async def get_user_by_id(conn: aiomysql.Connection, cursor: aiomysql.DictCursor, user_id: int) -> Optional[Dict[str, Any]]:
-    """
-    Retrieves a user by their ID.
-    Args:
-        conn: The aiomysql connection.
-        cursor: The aiomysql dictionary cursor.
-        user_id (int): The ID of the user.
-    Returns:
-        Optional[Dict[str, Any]]: The user's data or None if not found.
-    """
-    query = "SELECT id, email, hashed_password, first_name, last_name, is_verified, created_at, updated_at FROM users WHERE id = %s"
-    await cursor.execute(query, (user_id,))
-    user_record = await cursor.fetchone()
-    return user_record
-
-async def update_user_details(conn: aiomysql.Connection, cursor: aiomysql.DictCursor, email: str, updated_fields: Dict[str, Any]) -> None:
-    """
-    Updates specified fields for a user based on their email.
-    Does not update password directly (use update_password for that).
-    Args:
-        conn: The aiomysql connection.
-        cursor: The aiomysql dictionary cursor.
-        email (str): The email of the user to update.
-        updated_fields (Dict[str, Any]): Dictionary of fields to update.
-    """
-    updated_fields.pop("new_password", None) # Ensure 'new_password' is not in updated_fields
-
-    if not updated_fields:
-        return
-
-    updated_fields["updated_at"] = datetime.utcnow() # Update timestamp
-
-    # Construct the SET part of the SQL query dynamically
-    set_clauses = []
-    params = []
-    for field, value in updated_fields.items():
-        set_clauses.append(f"{field} = %s")
-        params.append(value)
-
-    if not set_clauses:
-        return # No fields to update
-
-    params.append(email) # Add email for the WHERE clause
-
-    query = f"UPDATE users SET {', '.join(set_clauses)} WHERE email = %s"
-    await cursor.execute(query, params)
-    await conn.commit()
-
-async def update_password(conn: aiomysql.Connection, cursor: aiomysql.DictCursor, email: str, new_password: str) -> None:
-    """
-    Updates a user's password.
-    Args:
-        conn: The aiomysql connection.
-        cursor: The aiomysql dictionary cursor.
-        email (str): The email of the user.
-        new_password (str): The new plain-text password.
-    """
-    hashed_password = hash_password(new_password)
-    query = "UPDATE users SET hashed_password = %s, updated_at = %s WHERE email = %s"
-    params = (hashed_password, datetime.utcnow(), email)
-    await cursor.execute(query, params)
-    await conn.commit()
-
-async def get_all_users(conn: aiomysql.Connection, cursor: aiomysql.DictCursor) -> List[Dict[str, Any]]:
-    """
-    Retrieves all users from the database.
-    Args:
-        conn: The aiomysql connection.
-        cursor: The aiomysql dictionary cursor.
-    Returns:
-        List[Dict[str, Any]]: A list of all user data.
-    """
-    query = "SELECT id, email, hashed_password, first_name, last_name, is_verified, created_at, updated_at FROM users"
-    await cursor.execute(query)
-    user_records = await cursor.fetchall()
-    return user_records
-
-# --- Password Reset Token Operations ---
-async def create_password_reset_token(conn: aiomysql.Connection, cursor: aiomysql.DictCursor, email: str) -> str:
-    """
-    Generates and stores a password reset token for the given email.
-    Args:
-        conn: The aiomysql connection.
-        cursor: The aiomysql dictionary cursor.
-        email (str): The email address for which to create the token.
-    Returns:
-        str: The generated token.
-    """
-    token = secrets.token_urlsafe(32)
-    expires_at = datetime.utcnow() + timedelta(hours=1)  # Token valid for 1 hour
-
-    # Invalidate any existing tokens for this user
-    delete_query = "DELETE FROM password_reset_tokens WHERE email = %s"
-    await cursor.execute(delete_query, (email,))
-
-    insert_query = """
-    INSERT INTO password_reset_tokens (email, token, created_at, expires_at)
-    VALUES (%s, %s, %s, %s)
-    """
-    params = (email, token, datetime.utcnow(), expires_at)
-    await cursor.execute(insert_query, params)
-    await conn.commit()
-    return token
-
-async def verify_password_reset_token(conn: aiomysql.Connection, cursor: aiomysql.DictCursor, token: str) -> Optional[str]:
-    """
-    Verifies a password reset token and returns the associated email if valid.
-    Args:
-        conn: The aiomysql connection.
-        cursor: The aiomysql dictionary cursor.
-        token (str): The token to verify.
-    Returns:
-        Optional[str]: The email associated with the token, or None if invalid/expired.
-    """
-    query = "SELECT id, email FROM password_reset_tokens WHERE token = %s AND expires_at > %s"
-    await cursor.execute(query, (token, datetime.utcnow()))
-    token_record = await cursor.fetchone()
-
-    if token_record:
-        email = token_record["email"]
-        # Invalidate the token after successful verification/use
-        delete_query = "DELETE FROM password_reset_tokens WHERE id = %s"
-        await cursor.execute(delete_query, (token_record["id"],))
-        await conn.commit()
-        return email
+def authenticate_user(conn, email: str, password: str):
+    """Authenticates a user by email and password."""
+    user = get_user_by_email(conn, email)
+    if user and verify_password(password, user["hashed_password"]):
+        return user
     return None
 
-# --- Email Verification Operations ---
-async def generate_verification_token(conn: aiomysql.Connection, cursor: aiomysql.DictCursor, email: str) -> str:
-    """
-    Generates and stores an email verification token.
-    Args:
-        conn: The aiomysql connection.
-        cursor: The aiomysql dictionary cursor.
-        email (str): The email address for which to generate the token.
-    Returns:
-        str: The generated token.
-    """
-    token = secrets.token_urlsafe(32)
-    expires_at = datetime.utcnow() + timedelta(hours=24)  # Token valid for 24 hours
+def update_user(conn, email: str, user_data: dict):
+    """Updates a user's details."""
+    cursor = conn.cursor()
+    try:
+        set_clauses = []
+        params = []
+        
+        if "first_name" in user_data:
+            set_clauses.append("first_name = ?")
+            params.append(user_data["first_name"])
+        if "last_name" in user_data:
+            set_clauses.append("last_name = ?")
+            params.append(user_data["last_name"])
+        if "new_password" in user_data:
+            hashed_password = hash_password(user_data["new_password"])
+            set_clauses.append("hashed_password = ?")
+            params.append(hashed_password)
+            
+        if not set_clauses:
+            return get_user_by_email(conn, email)
+            
+        set_clauses.append("updated_at = GETDATE()")
+        
+        query = f"UPDATE users SET {', '.join(set_clauses)} WHERE email = ?;"
+        params.append(email)
+        
+        cursor.execute(query, params)
+        conn.commit()
+        return get_user_by_email(conn, email)
+    finally:
+        cursor.close()
 
-    # Delete any existing unverified tokens for this email
-    delete_query = "DELETE FROM email_verification_tokens WHERE email = %s"
-    await cursor.execute(delete_query, (email,))
+# --- Password Reset Token Management ---
+def create_password_reset_token(conn, email: str):
+    """Creates and stores a password reset token for the given email."""
+    cursor = conn.cursor()
+    try:
+        token = secrets.token_urlsafe(32)
+        # Token expires in 1 hour
+        expires_at = datetime.utcnow() + timedelta(hours=1)
+        
+        # Delete any existing tokens for this email
+        delete_query = "DELETE FROM password_reset_tokens WHERE email = ?;"
+        cursor.execute(delete_query, (email,))
+        
+        insert_query = "INSERT INTO password_reset_tokens (email, token, created_at, expires_at) VALUES (?, ?, GETDATE(), ?);"
+        cursor.execute(insert_query, (email, token, expires_at))
+        conn.commit()
+        return token
+    finally:
+        cursor.close()
 
-    insert_query = """
-    INSERT INTO email_verification_tokens (email, token, created_at, expires_at)
-    VALUES (%s, %s, %s, %s)
-    """
-    params = (email, token, datetime.utcnow(), expires_at)
-    await cursor.execute(insert_query, params)
-    await conn.commit()
-    return token
+def reset_password_with_token(conn, token: str, new_password: str):
+    """Resets a user's password using a valid token."""
+    cursor = conn.cursor()
+    try:
+        # Check if the token is valid and not expired
+        query = "SELECT email FROM password_reset_tokens WHERE token = ? AND expires_at > GETDATE();"
+        cursor.execute(query, (token,))
+        token_record = cursor.fetchone()
+        
+        if token_record:
+            email = token_record[0]
+            hashed_password = hash_password(new_password)
+            
+            # Update user's password
+            update_query = "UPDATE users SET hashed_password = ?, updated_at = GETDATE() WHERE email = ?;"
+            cursor.execute(update_query, (hashed_password, email))
+            
+            # Delete the used token
+            delete_query = "DELETE FROM password_reset_tokens WHERE email = ?;"
+            cursor.execute(delete_query, (email,))
+            
+            conn.commit()
+            return True
+    finally:
+        cursor.close()
+    return False
 
-async def verify_user_with_token(conn: aiomysql.Connection, cursor: aiomysql.DictCursor, token: str) -> bool:
+# --- Email Verification Token Management ---
+def create_email_verification_token(conn, email: str):
+    """Creates and stores an email verification token for a user."""
+    cursor = conn.cursor()
+    try:
+        # Generate a secure, unique token
+        token = secrets.token_urlsafe(32)
+        # Token expires in 24 hours
+        expires_at = datetime.utcnow() + timedelta(hours=24)
+        
+        # Delete any existing tokens for this email to prevent multiple valid tokens
+        delete_query = "DELETE FROM email_verification_tokens WHERE email = ?;"
+        cursor.execute(delete_query, (email,))
+        conn.commit()
+        
+        # Insert the new token
+        insert_query = "INSERT INTO email_verification_tokens (email, token, created_at, expires_at) VALUES (?, ?, ?, ?);"
+        cursor.execute(insert_query, (email, token, datetime.utcnow(), expires_at))
+        conn.commit()
+        return token
+    finally:
+        cursor.close()
+
+def verify_user_with_token(conn, token: str):
     """
     Verifies a user's email using the provided token.
-    Args:
-        conn: The aiomysql connection.
-        cursor: The aiomysql dictionary cursor.
-        token (str): The email verification token.
-    Returns:
-        bool: True if verification is successful, False otherwise.
     """
-    query = "SELECT id, email FROM email_verification_tokens WHERE token = %s AND expires_at > %s"
-    await cursor.execute(query, (token, datetime.utcnow()))
-    token_record = await cursor.fetchone()
+    cursor = conn.cursor()
+    try:
+        query = "SELECT email FROM email_verification_tokens WHERE token = ? AND expires_at > GETDATE()"
+        cursor.execute(query, (token,))
+        token_record = cursor.fetchone()
 
-    if token_record:
-        email = token_record["email"]
-        # Update user's is_verified status
-        update_query = "UPDATE users SET is_verified = TRUE, updated_at = %s WHERE email = %s"
-        await cursor.execute(update_query, (datetime.utcnow(), email))
+        if token_record:
+            email = token_record[0]
+            # Update user's is_verified status
+            update_query = "UPDATE users SET is_verified = 1, updated_at = GETDATE() WHERE email = ?;"
+            cursor.execute(update_query, (email,))
+            
+            # Delete the used token
+            delete_query = "DELETE FROM email_verification_tokens WHERE email = ?;"
+            cursor.execute(delete_query, (email,))
+            
+            conn.commit()
+            return True
+    except pyodbc.Error as ex:
+        print(f"Database error during email verification: {ex}")
+        conn.rollback() # Rollback changes if an error occurred
+    finally:
+        cursor.close()
+    return False
 
-        # Invalidate the token
-        delete_query = "DELETE FROM email_verification_tokens WHERE id = %s"
-        await cursor.execute(delete_query, (token_record["id"],))
-        await conn.commit()
-        return True
+def is_email_verified(conn, email: str):
+    """
+    Checks if the user's email is verified.
+    """
+    cursor = conn.cursor()
+    try:
+        query = "SELECT is_verified FROM users WHERE email = ?;"
+        cursor.execute(query, (email,))
+        is_verified_row = cursor.fetchone()
+        if is_verified_row:
+            return bool(is_verified_row[0]) # Convert from SQL boolean (0/1) to Python bool
+    finally:
+        cursor.close()
     return False
