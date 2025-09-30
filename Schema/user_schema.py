@@ -8,6 +8,11 @@ class UserCreate(BaseModel):
     email: EmailStr
     password: str
 
+class UserUpdate(BaseModel):
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    new_password: Optional[str] = None
+
 # Pydantic model for user output (excluding sensitive info like hashed password)
 class UserOut(BaseModel):
     id: int
@@ -15,9 +20,6 @@ class UserOut(BaseModel):
     last_name: str
     email: EmailStr
     is_verified: bool
-
-    class Config:
-        from_attributes = True # Allows mapping from SQLAlchemy models
 
 # Pydantic model for password reset request (email)
 class PasswordResetRequest(BaseModel):
@@ -35,9 +37,3 @@ class EmailVerificationRequest(BaseModel):
 # Pydantic model for verifying email with a token
 class EmailVerification(BaseModel):
     token: str
-
-# Pydantic model for updating user details
-class UserUpdate(BaseModel):
-    first_name: Optional[str] = None
-    last_name: Optional[str] = None
-    new_password: Optional[str] = None
