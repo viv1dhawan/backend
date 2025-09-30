@@ -1,85 +1,147 @@
-# database.py
-import aiomysql
-import asyncio
-import os
-from sqlalchemy.ext.asyncio import create_async_engine
-from sqlalchemy import MetaData
+# database.py - Updated for MySQL
+import mysql.connector
+from mysql.connector import Error
+from datetime import datetime
 
-# Configuration for your MySQL database
-DB_USER = "root"
-DB_PASSWORD = "EYDIQLYoErENIIPBMucXrLEHRJmtuEVO"
-DB_HOST = "shortline.proxy.rlwy.net"
-DB_PORT = 52270
-DB_NAME = "railway"
+# MySQL connection parameters (parsed from your connection string)
+DB_CONFIG = {
+    "host": "shortline.proxy.rlwy.net",
+    "port": 52270,
+    "user": "root",
+    "password": "EYDIQLYoErENIIPBMucXrLEHRJmtuEVO",
+    "database": "railway"
+}
 
-# SQLAlchemy-compatible URL for create_async_engine
-DATABASE_URL_ASYNC = f"mysql+aiomysql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
-
-# Global variable for the aiomysql connection pool
-db_pool = None
-
-metadata = MetaData()
-
-async def create_db_pool():
+def get_connection():
     """
-    Initializes the aiomysql connection pool.
-    This should be called once at application startup.
+    Open and return a new connection to MySQL.
+    Caller is responsible for closing the connection.
     """
-    global db_pool
-    if db_pool is None:
-        try:
-            db_pool = await aiomysql.create_pool(
-                host=DB_HOST,
-                port=DB_PORT,
-                user=DB_USER,
-                password=DB_PASSWORD,
-                db=DB_NAME,
-                autocommit=False,
-                charset='utf8mb4',
-                cursorclass=aiomysql.cursors.DictCursor,
-                minsize=1,
-                maxsize=10
-            )
-            print("Database connection pool created successfully.")
-        except Exception as e:
-            print(f"Failed to create database pool: {e}")
-            raise # Re-raise to prevent app from starting without DB connection
-
-async def close_db_pool():
-    """
-    Closes the aiomysql connection pool.
-    This should be called once at application shutdown.
-    """
-    global db_pool
-    if db_pool:
-        db_pool.close()
-        await db_pool.wait_closed()
-        print("Database connection pool closed.")
-
-async def create_tables():
-    import models 
-    temp_async_engine = create_async_engine(DATABASE_URL_ASYNC, echo=False)
-    async with temp_async_engine.begin() as conn:
-        await conn.run_sync(metadata.create_all)
-    await temp_async_engine.dispose() # Dispose of the temporary engine
-    print("Tables checked/created from models.py definitions.")
-
-async def get_db_connection():
-    if db_pool is None:
-        await create_db_pool() 
-
-    conn = None
-    cursor = None
     try:
-        conn = await db_pool.acquire()
-        cursor = await conn.cursor()
-        yield conn, cursor
-    except Exception as e:
-        if conn:
-            await conn.rollback()
-        raise e
+        conn = mysql.connector.connect(**DB_CONFIG)
+        if conn.is_connected():
+            return conn
+    except Error as ex:
+        print(f"Database connection error: {ex}")
+        return None
+
+def create_tables():
+    """
+    Creates tables if they do not exist. 
+    This is a synchronous operation.
+    """
+    try:
+        conn = get_connection()
+        if not conn:
+            print("Failed to get database connection to create tables.")
+            return
+
+        cursor = conn.cursor()
+
+        # SQL queries for table creation (MySQL syntax)
+        create_users_table = """
+        CREATE TABLE IF NOT EXISTS users (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            email VARCHAR(255) NOT NULL UNIQUE,
+            hashed_password VARCHAR(255) NOT NULL,
+            first_name VARCHAR(255),
+            last_name VARCHAR(255),
+            is_verified BOOLEAN DEFAULT 0 NOT NULL,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+        );
+        """
+
+        create_password_reset_tokens_table = """
+        CREATE TABLE IF NOT EXISTS password_reset_tokens (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            email VARCHAR(255) NOT NULL,
+            token VARCHAR(255) NOT NULL UNIQUE,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            expires_at DATETIME NOT NULL
+        );
+        """
+
+        create_email_verification_tokens_table = """
+        CREATE TABLE IF NOT EXISTS email_verification_tokens (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            email VARCHAR(255) NOT NULL,
+            token VARCHAR(255) NOT NULL UNIQUE,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            expires_at DATETIME NOT NULL
+        );
+        """
+
+        create_questions_table = """
+        CREATE TABLE IF NOT EXISTS questions (
+            id CHAR(36) PRIMARY KEY,
+            user_id INT,
+            text TEXT NOT NULL,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        """
+
+        create_comments_table = """
+        CREATE TABLE IF NOT EXISTS comments (
+            id CHAR(36) PRIMARY KEY,
+            user_id INT,
+            question_id CHAR(36),
+            text TEXT NOT NULL,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (question_id) REFERENCES questions(id) ON DELETE CASCADE
+        );
+        """
+
+        create_question_interactions_table = """
+        CREATE TABLE IF NOT EXISTS question_interactions (
+            id CHAR(36) PRIMARY KEY,
+            user_id INT,
+            question_id CHAR(36),
+            type VARCHAR(10) NOT NULL,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (user_id, question_id),
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (question_id) REFERENCES questions(id) ON DELETE CASCADE
+        );
+        """
+
+        create_researchers_table = """
+        CREATE TABLE IF NOT EXISTS researchers (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            title VARCHAR(255) NOT NULL,
+            authors VARCHAR(500) NOT NULL,
+            user_id INT,
+            profile VARCHAR(500) NOT NULL,
+            publication_date VARCHAR(50) NOT NULL,
+            url VARCHAR(1000) NOT NULL,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        """
+
+        tables = [
+            create_users_table,
+            create_password_reset_tokens_table,
+            create_email_verification_tokens_table,
+            create_questions_table,
+            create_comments_table,
+            create_question_interactions_table,
+            create_researchers_table,
+        ]
+
+        for table_sql in tables:
+            cursor.execute(table_sql)
+            print("Table checked/created.")
+
+        conn.commit()
+
+    except Error as ex:
+        print(f"Error creating tables: {ex}")
     finally:
-        if cursor:
-            await cursor.close()
-        if conn:
-            await db_pool.release(conn)
+        if 'cursor' in locals() and cursor:
+            cursor.close()
+        if 'conn' in locals() and conn and conn.is_connected():
+            conn.close()
