@@ -1,11 +1,8 @@
-# db_info/user_db.py - Updated for pyodbc
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
 import bcrypt
 import secrets
-import pyodbc
 
-# Helper function to convert pyodbc.Row to a dictionary
 def row_to_dict(row):
     if not row:
         return None
@@ -214,3 +211,4 @@ def is_email_verified(conn, email: str):
     finally:
         cursor.close()
     return False
+
