@@ -1,14 +1,11 @@
-# Backend/db_info/application_db.py - Updated for pyodbc
 import uuid
 from datetime import datetime
 
-# Helper function to convert pyodbc.Row to a dictionary
 def row_to_dict(row):
     if not row:
         return None
     return {column[0]: row[i] for i, column in enumerate(row.cursor_description)}
 
-# Helper function to convert a list of pyodbc.Row objects to a list of dictionaries
 def rows_to_dict_list(rows):
     if not rows:
         return []
@@ -319,3 +316,4 @@ def get_all_researchers_db(conn):
         return rows_to_dict_list(cursor.fetchall())
     finally:
         cursor.close()
+
